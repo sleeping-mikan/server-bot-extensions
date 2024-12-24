@@ -1,0 +1,147 @@
+<!doctype html>
+<html>
+<head>
+    <title>Login</title>
+</head>
+<style>
+    body{
+        background-color: #EEEEEE;
+        margin: 0;
+        height: auto;
+        display: flex;
+        width: 100vw;
+        flex-wrap: wrap;
+    }
+    #langChenge{
+        position: relative;
+        top: 0%;
+        left: 0%;
+        width: 100vw;
+        height: 100vh;
+    }
+    #field{
+        position: relative;
+        top:10px;
+        left: 50%;
+        width: 50%;
+        height: 600px;
+        border-radius: 20px;
+        background-color: white;
+        transform: translate(-50%, 0%);
+    }
+    .msg {
+        position: absolute;
+        color: black;
+        font-size: 24px;
+        text-align: center;
+        top:100px;
+        left: 50%;
+        transform: translate(-50%, 0%);
+        width: 300px;
+    }
+    @media screen and (max-width: 700px) {
+        #field{
+            width: 90%;
+            height: 450px;
+        }
+        .msg {
+            top:50px;
+        }
+        #token{
+            top: 150px;
+        }
+        #login{
+            top: 250px;
+        }
+    }
+    #token{
+        position: absolute;
+        top: 250px;
+        left: 50%;
+        transform: translate(-50%, 0%);
+        width: 300px;
+        height: 50px;
+    }
+    #login{
+        position: absolute;
+        top: 350px;
+        left: 50%;
+        transform: translate(-50%, 0%);
+        width: 300px;
+        height: 50px;
+    }
+    #langJa:not(:checked) ~ * *:lang(ja) {
+    display    : none;
+    }
+    #langEn:not(:checked) ~ * *:lang(en) {
+    display    : none;
+    }
+     /* === 各ラジオボタンのラベルをボタンに変更 == */
+    #langChenge label{
+    display    : inline-block;
+    border     : 1px solid #ccc;
+    box-shadow : 2px 2px #999;
+    padding    : 2px 6px;
+    background-color: white;
+    }
+    #langChenge input[type="radio"]{
+        display    : none;
+        position: absolute;
+        left:0%;
+    }
+    #langJa:checked ~ label[for="langJa"] {
+        background :aliceblue;
+    }
+    #langEn:checked ~ label[for="langEn"] {
+        background :aliceblue;
+    }
+    #errmsg{
+        position: absolute;
+        top: 210px;
+        left: 50%;
+        transform: translate(-50%, 0%);
+        width: 300px;
+        height: 50px;
+        color: red;
+    }
+</style>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<body>
+    <div>
+        <div id="langChenge">
+            <input type="radio" name="land" id="langJa" checked>
+            <input type="radio" name="land" id="langEn">
+            <label for="langJa">
+                <span lang="ja">日本語</span>
+                <span lang="en">Japanese</span>
+            </label>
+            <label for="langEn">
+                <span lang="ja">英語</span>
+                <span lang="en">English</span>
+            </label>
+            <div id="field">
+                
+                <div class="msg">
+                    <p lang="en">Enter your token (use /token in discord)</p>
+                    <p lang="ja">トークンを入力 (Discordで/tokenを実行してください)</p>
+                </div>
+                <form method="POST">
+                    <input type="text" name="token" id="token" placeholder="Token" required>
+                    <button type="submit" id="login">Login</button>
+                </form>
+                <div id="errmsg">
+                {% with messages = get_flashed_messages() %}
+                    {% if messages %}
+                        <ul>
+                            {% for message in messages %}
+                                <li>{{ message }}</li>
+                            {% endfor %}
+                        </ul>
+                    {% endif %}
+                {% endwith %}
+                </div>
+                </div>
+            </div>
+        </div>
+    </body>
+</html>

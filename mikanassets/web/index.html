@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html>
+    <style>
+        html, body {
+            margin: 0;
+            padding-top: 6vh;
+            height: auto;
+            display: flex;
+            width: 100vw;
+            flex-wrap: wrap;
+            background-color: #EEEEEE;
+        }
+        p{
+            margin: 0;
+        }
+        #right_content {
+            width:45%;
+        }
+        .header {
+            z-index: 9999;
+            height: 10vh;
+            background-color: white;
+            width: 100%;
+            position: fixed;
+            top:0px;
+            left:0px;
+            border-bottom: 1px;
+            border-top: 0px;
+            border-left: 0px;
+            border-right: 0px;
+            border-style: solid;
+            border-color: black;
+        }
+        .icon {
+            position: absolute;
+            top: 50%;
+            left: 8%;
+            transform: translate(-50%, -50%);
+            height: 80%;
+        }
+        .title {
+            font-size: 150%;
+            position: relative;
+            top: 30%;
+            left: 15%;
+            width: 70%;
+        }
+        #update-button {
+            position: absolute;
+            top: 50%;
+            right: 8%;
+            transform: translate(-50%, -50%);
+        }
+        #console{
+            width: 48%;
+            background-color: white;
+            border-radius: 30px;
+            margin-left: 1%;
+            margin-right: 1%;
+        }
+        .item_titles{
+            position: relative;
+            font-size: 150%;
+            top:10px;
+            left: 10px;
+        }
+        .console_field {
+            position: relative;
+            top: 10px;
+            left: 0.5vw;
+            border-radius: 10px;
+            display: flex;
+            height: auto;
+            width: 47vw;
+            background-color: aliceblue;
+        }
+        @media screen and (max-width: 600px) {
+            .console_field {
+                left:1.5vw;
+                width: 95vw;
+            }
+            #console{
+                width: 100vw;
+            }
+            #right_content {
+                width: 100vw;
+            }
+            #status{
+                top: 12px;
+            }
+        }
+        #ansi-output {
+            position: relative;
+            margin-left: 10px;
+            margin-right: 10px;
+            margin-top: 10px;
+            margin-bottom: 10px;
+            height: 100%;
+            width: 100%;
+        }
+        .input-container {
+            position: relative;
+            height: 50px;
+            width: 100%;
+        }
+        #input-text {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            width: 79%;
+            height: 20px;
+        }
+        #submit-button {
+            position: absolute;
+            top: 10px;
+            right: 2%;
+            width: 15%;
+            height: 26px;
+        }
+        #status{
+            position: relative;
+            width: 98%;
+            height: 140px;
+            background-color: white;
+            border-radius: 30px;
+            margin-left: 1%;
+            margin-right: 1%;
+        }
+        #serverstatus{
+            position: absolute;
+            width: 20%;
+        }
+        .onlinestatus{
+            display: flex;
+            position: relative;
+            font-size: 1.5rem;
+            top:10px;
+        }
+        .serverstatus{
+            position: absolute;
+            background-color: red;
+            border-radius: 15px;
+            height: 15px;
+            width: 15px;
+            left:30px;
+            top: 8px;
+        }
+        .botstatus{
+            position: absolute;
+            background-color: greenyellow;
+            border-radius: 15px;
+            height: 15px;
+            width: 15px;
+            left:30px;
+            top: 8px;
+        }
+        .statustxt{
+            position: relative;
+            left: 60px;
+        }
+        #command{
+            position: relative;
+            top:25px;
+            width: 98%;
+            height: 500px;
+            background-color: white;
+            border-radius: 30px;
+            margin-left: 1%;
+            margin-right: 1%;
+        }
+        #command_field{
+            position: absolute;
+            top:10px;
+            left: 5%;
+            font-size: 1.3rem;
+        }
+        #command_field {
+            position:relative;
+        }
+        #command_field .command_run{
+            background-color: rgb(255, 203, 71);
+            border-radius: 10px;
+            margin-right: 1%;
+            width:80px;
+            height: 31px;
+            text-align: center;
+        }
+        .command_run:hover{
+            cursor: pointer;
+            opacity: 0.7;
+        }
+        #command_start{
+            display: flex;
+            margin-top: 1%;
+            margin-bottom: 1%;
+        }
+        #command_backup{
+            display: flex;
+            margin-top: 1%;
+            margin-bottom: 1%;
+            flex-wrap: wrap;
+        }
+        #file-name{
+            position: relative;
+            top:2px;
+            left: 20px;
+        }
+        #file-name-label{
+            position: relative;
+            left:5%;
+            top:8px;
+            font-size: 1.0rem;
+        }
+        @media screen and (max-width: 1300px) {
+        }
+        #file-name-container{
+            display: flex;
+        }
+    </style>
+    <body>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <!-- jQueryをCDNから読み込む -->
+        <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+        <div class = "header">
+            <img src="web/pictures/icon.png" class="icon">
+            <div class="title">server-bot</div>
+        </div>
+        <div id = "console">
+            <dev class="item_titles">
+                ▶Console
+            </dev>
+            <div class="console_field">
+                <div id="ansi-output"></div>
+                <script>
+                    // ページロード時にデータを取得
+                    function fetchData() {
+                        $.getJSON("/get_console_data", function(data) {
+                            // サーバーがリダイレクトを要求している場合
+                            if (data.redirect) {
+                                window.location.href = data.redirect;  // 指定されたURLへリダイレクト
+                                return;  // これ以上の処理をしない
+                            }
+                            // 取得したHTMLをdivに挿入
+                            $("#ansi-output").html(data.html_string);
+                            // status["server"]を利用してserverstatusのbg色を変更
+                            if (data.online_status["server"] == true) {
+                                $(".serverstatus").css("background-color", "greenyellow");
+                            } else {
+                                $(".serverstatus").css("background-color", "red");
+                            }
+                        });
+                    }
+            
+                    // ページが読み込まれたときに最初のデータを取得
+                    $(document).ready(function() {
+                        fetchData();  // 初回のデータ取得
+
+                        // 5秒ごとにデータを取得
+                        setInterval(fetchData, 5000);
+                    });
+                </script>
+            </div>
+            
+            
+            <div class="input-container">
+                <form id="console-form">
+                    <input type="text" id="input-text" name="userInput">
+                    <button id="submit-button">submit</button>
+                </form>
+                <script>
+                    $('#submit-button').on('click', function() {
+                        var userInput = $('#input-text').val();
+                        $.ajax({
+                            url: '/submit_data',
+                            method: 'POST',
+                            data: { userInput: userInput },
+                            contentType: 'application/x-www-form-urlencoded; charset=UTF-8',
+                            dataType: 'json',  // 返されるデータの型を指定
+                            success: function(response) {
+                                // サーバーからリダイレクトの指示があった場合
+                                if (response.redirect) {
+                                    window.location.href = response.redirect;  // 指定されたURLにリダイレクト
+                                } else {
+                                    // 通常のレスポンス処理
+                                    alert('server response: ' + response.message);
+                                }
+                            },
+                            error: function(jqXHR, textStatus, errorThrown) {
+                                alert('Error: ' + textStatus);
+                                console.error(jqXHR.responseText);
+                            }
+                        });
+                    });
+                </script>
+            </div>
+        </div>
+        <div id = "right_content">
+            <div id = "status">
+                <dev class="item_titles">
+                    ▶Status
+                </dev>
+                <div class="onlinestatus">
+                    <div class="botstatus"></div>
+                    <div class="statustxt">Bot</div>
+                </div>
+                <div class="onlinestatus">
+                    <div class="serverstatus"></div>
+                    <div class="statustxt">MainServer</div>
+                </div>
+            </div>
+            <div id = "command">
+                <dev class="item_titles">
+                    ▶Run Command
+                </dev>
+                <div id="command_field">
+                    <div id="command_start">
+                        <div class="command_run" id = "run_start">Run</div>
+                        <script>
+                            $('#run_start').on('click', function() {
+                                $.ajax({
+                                    url: '/flask_start_server',
+                                    method: 'POST',
+                                    contentType: 'application/x-www-form-urlencoded; charset=UTF-8',
+                                    dataType: 'json',  // 返されるデータの型を指定
+                                    success: function(response) {
+                                         // サーバーからリダイレクトの指示があった場合
+                                        if (response.redirect) {
+                                            window.location.href = response.redirect;  // 指定されたURLにリダイレクト
+                                        } else {
+                                                alert('server response: ' + response);
+                                        }
+                                    },
+                                    error: function(jqXHR, textStatus, errorThrown) {
+                                        alert('Error: ' + textStatus);
+                                        console.error(jqXHR.responseText);
+                                    }
+                                });
+                            });
+                        </script>
+                        Start Server
+                    </div>
+                    <div id="command_backup">
+                        <div class="command_run" id = "run_backup">Run</div>
+                        <script>
+                            $('#run_backup').on('click', function() {
+                                $.ajax({
+                                    url: '/flask_backup_server',
+                                    method: 'POST',
+                                    data: { fileName: $('#file-name').val() },
+                                    contentType: 'application/x-www-form-urlencoded; charset=UTF-8',
+                                    dataType: 'json',  // 返されるデータの型を指定
+                                    success: function(response) {
+                                        // サーバーからリダイレクトの指示があった場合
+                                        if (response.redirect) {
+                                            window.location.href = response.redirect;  // 指定されたURLにリダイレクト
+                                        } else {
+                                            alert('server response: ' + response);
+                                        }
+                                    },
+                                    error: function(jqXHR, textStatus, errorThrown) {
+                                        alert('Error: ' + textStatus);
+                                        console.error(jqXHR.responseText);
+                                    }
+                                });
+                            });
+                        </script>
+                        Buckup Server
+                            <div id="file-name-container">
+                                <div id="file-name-label">File Name</div>
+                                <input type="text" id="file-name" name="fileInput" value="world"></input>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </body>
+</html>

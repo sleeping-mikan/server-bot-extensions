@@ -12,6 +12,7 @@ How to use server-bot-v2's extension directory
 ## サポートされている機能
 
  - コマンドの追加
+   - mikanassets/extension/<拡張機能名>/commands.pyを`/extension-<拡張機能名> <拡張機能で定義したコマンド>`で実行できます。
  - (予定)既存コマンドの実行終了時の文字列の改変/追加操作
    - 例えば、/ipの実行で返されるipアドレスは本来discordに返されますが、そのipをextensionにわたし、特定のサーバー向けに作られたプロパティからportを読み出し、その文字列と結合したものを返すことができます。
   

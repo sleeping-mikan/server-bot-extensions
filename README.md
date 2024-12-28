@@ -46,7 +46,7 @@ from __main__ import print_user
 hello_logger = extension_logger.getChild("hello")
 
 # スラッシュコマンドを追加する例(example of adding slash commands)
-# このコマンドはdiscord上で/templates helloとして表示される(displayed on discord as /templates hello)
+# このコマンドはdiscord上で/extension-template helloとして表示される(displayed on discord as /templates hello)
 # /templatesの名前はextension下のディレクトリ名に依存する(depend on extension directory name)
 @tree.command(name="hello", description="Say hello")
 async def hello_command(interaction: discord.Interaction):
@@ -63,7 +63,7 @@ async def hello_command(interaction: discord.Interaction):
 my_group = discord.app_commands.Group(name="group", description="A group of commands")
 
 # サブコマンドの例(example of sub command)
-# このコマンドはdiscord上で/templates group say <message>として表示される(displayed on discord as /templates group say <message>)
+# このコマンドはdiscord上で/extension-template group say <message>として表示される(displayed on discord as /templates group say <message>)
 @my_group.command(name="say", description="Say something")
 async def say_command(interaction: discord.Interaction, message: str):
     await interaction.response.send_message(message)

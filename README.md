@@ -47,7 +47,7 @@ hello_logger = extension_logger.getChild("hello")
 
 # スラッシュコマンドを追加する例(example of adding slash commands)
 # このコマンドはdiscord上で/extension-template helloとして表示される(displayed on discord as /templates hello)
-# /templatesの名前はextension下のディレクトリ名に依存する(depend on extension directory name)
+# /extension-templateの名前はextension下のディレクトリ名に依存する(depend on extension directory name)
 @tree.command(name="hello", description="Say hello")
 async def hello_command(interaction: discord.Interaction):
     # 利用者のログを出力(print user log)

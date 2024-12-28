@@ -22,17 +22,39 @@ How to use server-bot-v2's extension directory
 
 ```py
 import discord
+
 # メインに存在するコマンド群をimport(import from __main__ if want to add discord commands) 
 from __main__ import extension_commands_group as tree
-# もし、管理しているサーバープロセスに対して操作をしたいならprocessをimport
+# もし、管理しているサーバープロセスに対して操作をしたいならprocessをimport(import from __main__ if want to control server process)
 from __main__ import process
+# もし、ログを出力したいならloggerをimport(logger is imported from __main__ if want to print log)
+from __main__ import extension_logger
+# サーバーのディレクトリ/サーバーの名前/botのディレクトリ/botの名前をimport(import from __main__ if want to get server directory/server name/bot directory)
+from __main__ import server_path,server_name,now_path,now_file
+# 起動時間をimport(import from __main__ if want to get start time)
+from __main__ import time
+# 直近のログを取得(get recent log)
+from __main__ import cmd_logs
+# 各コマンドで権限データをセット/確認したい場合
+from __main__ import COMMAND_PERMISSION
+# logger補助関数 await print_user(logger,user: discord.user) で利用者のログを残す
+from __main__ import print_user
+
+
+# hello コマンド用に子ロガーを作成(create child logger for hello command)
+hello_logger = extension_logger.getChild("hello")
 
 # スラッシュコマンドを追加する例(example of adding slash commands)
 # このコマンドはdiscord上で/templates helloとして表示される(displayed on discord as /templates hello)
 # /templatesの名前はextension下のディレクトリ名に依存する(depend on extension directory name)
 @tree.command(name="hello", description="Say hello")
 async def hello_command(interaction: discord.Interaction):
+    # 利用者のログを出力(print user log)
+    await print_user(hello_logger,interaction.user)
+    # discordにメッセージを送信(send message to discord)
     await interaction.response.send_message("Hello, world!")
+    # 送信したメッセージをログに残す(log sent message)
+    hello_logger.info('hello sent')
 
 
 

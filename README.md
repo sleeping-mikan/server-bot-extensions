@@ -26,20 +26,22 @@ import discord
 
 # メインに存在するコマンド群をimport(import from __main__ if want to add discord commands) 
 from __main__ import extension_commands_group as tree
-# もし、管理しているサーバープロセスに対して操作をしたいならprocessをimport(import from __main__ if want to control server process)
-from __main__ import process
+# もし、管理しているサーバープロセスに対して操作をしたいならget_process functionをimport(import get_process function from __main__ if want to control server process)
+from __main__ import get_process
 # もし、ログを出力したいならloggerをimport(logger is imported from __main__ if want to print log)
 from __main__ import extension_logger
 # サーバーのディレクトリ/サーバーの名前/botのディレクトリ/botの名前をimport(import from __main__ if want to get server directory/server name/bot directory)
 from __main__ import server_path,server_name,now_path,now_file
 # 起動時間をimport(import from __main__ if want to get start time)
 from __main__ import time
-# 直近のログを取得(get recent log)
-from __main__ import cmd_logs
+# 直近のログを取得(get recent log)する関数
+from __main__ import get_log
 # 各コマンドで権限データをセット/確認したい場合
 from __main__ import COMMAND_PERMISSION
 # logger補助関数 await print_user(logger,user: discord.user) で利用者のログを残す
 from __main__ import print_user
+# サーバーを停止/開始する関数
+from __main__ import core_stop, core_start
 
 
 # hello コマンド用に子ロガーを作成(create child logger for hello command)

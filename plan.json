@@ -23,11 +23,11 @@
     {
       "id": "quick-commands",
       "name": "クイックコマンド",
-      "status": "implemented",
-      "priority": "high",
+      "status": "rejected",
+      "priority": "n/a",
       "category": "minecraft-vanilla-like",
       "compatible_servers": ["vanilla", "paper", "spigot", "fabric", "forge"],
-      "summary": "weather / time / gamemode / difficulty / say など、よく使うバニラ系コンソールコマンドを選択式スラッシュコマンドとしてラップする。",
+      "summary": "weather / time / gamemode / difficulty / say など、よく使うバニラ系コンソールコマンドを選択式スラッシュコマンドとしてラップする案。",
       "features": [
         "/extension-quick-commands weather <clear|rain|thunder>",
         "/extension-quick-commands time <day|noon|night|midnight>",
@@ -36,12 +36,12 @@
         "/extension-quick-commands say <message> (改行をサニタイズしてブロードキャスト)"
       ],
       "apis_used": ["extension_commands_group", "write_server_in", "user_permission", "not_enough_permission", "print_user"],
-      "notes": "コマンド候補は app_commands.Choice で固定し、任意文字列を直接コンソールに流さないことで注入を防止(sayのみ自由入力のため改行除去を実施)。"
+      "notes": "一度実装したが却下。コアBotの /cmd serverin (allow_cmd で許可されたコマンドを自由入力で送信可能) と、ターミナルチャンネル (メッセージをそのまま ctx.server_process.write する生パススルー、bot/events.py) で既に同じことができるため、選択式UIという見た目の違いしかなく拡張機能として作る意味がなかった。"
     },
     {
       "id": "auto-announce",
       "name": "定期アナウンス",
-      "status": "planned",
+      "status": "implemented",
       "priority": "medium",
       "category": "general",
       "compatible_servers": ["any"],
@@ -49,10 +49,10 @@
       "features": [
         "append_task によるループ登録",
         "/extension-auto-announce list / add / remove でメッセージ管理",
-        "サーバー内アナウンスとDiscordアナウンスをそれぞれ on/off 可能"
+        "/extension-auto-announce config で間隔・送信先(サーバー/Discordチャンネル)を設定"
       ],
-      "apis_used": ["append_task", "write_server_in", "extension_commands_group"],
-      "notes": "Discord側への送信は bot.client のクライアント/チャンネルIDを別途importして使う想定。設定は拡張機能ディレクトリ内にJSONで永続化する。"
+      "apis_used": ["append_task", "write_server_in", "extension_commands_group", "bot.client.client"],
+      "notes": "quick-commands の反省を踏まえて選定。/cmd serverin やターミナルチャンネルは一発コマンドしか送れず「N分おきに繰り返す」自動化はできないため、append_task を使う拡張機能として明確に価値がある。設定はJSON(state.json)で拡張機能ディレクトリ内に永続化。"
     },
     {
       "id": "uptime",

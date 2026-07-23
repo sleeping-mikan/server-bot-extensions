@@ -2,7 +2,8 @@
   "$schema_note": "server-bot-v3 (https://github.com/sleeping-mikan/server-bot-v3) 向け拡張機能の実装計画。仕様は https://github.com/sleeping-mikan/server-bot-extensions を参照。",
   "target_bot": "server-bot-v3",
   "extension_dir_convention": "mikanassets/extension/<id>/commands.py",
-  "generated_at": "2026-07-23",
+  "generated_at": "2026-07-24",
+  "operator_profile": "個人〜身内数人で運用するバニラMinecraft Java サーバー1台。管理者はDiscord上1名想定(.config の admin.members が1件)。この前提で「実際に月1回以上使われるか」を採用基準にしている。",
   "extension_api_summary": {
     "import_from": "core.state.ctx (モジュール先頭で読み込み、以後 tree/logger の変数に保持する)",
     "available": [
@@ -10,67 +11,46 @@
       "ctx.extension_logger (logging.Logger)",
       "bot.extensions.get_process() -> Popen | None",
       "bot.extensions.append_task(func) -> discord.ext.tasks ループを起動/停止管理付きで登録",
-      "bot.extensions.write_server_in(command: str) -> (bool, str) サーバーstdinへ1行書き込み",
+      "bot.extensions.write_server_in(command: str) -> (bool, str) サーバーstdinへ1行書き込み (allow_cmd等の許可リストは通らない、無条件書き込み)",
       "bot.utils.print_user / user_permission / not_enough_permission (bot本体と共通の権限system)",
-      "ctx.server_path / ctx.server_name / ctx.paths.base 等の読み取り専用パス情報"
+      "ctx.server_path / ctx.server_name / ctx.backup_path / ctx.paths.base 等の読み取り専用パス情報",
+      "bot.client.client (discord.Client) を直接importすればチャンネル取得/送信も可能"
     ],
     "known_limitations": [
       "サーバーの標準出力を拡張側で直接フックする仕組みは無い(公式ドキュメントで「フック機能は計画中」と明記)。そのためコマンド実行結果を読み取って加工する系の拡張は現状実装不可。",
-      "write_server_in() は渡した文字列に改行を含めると複数コマンドとして注入されてしまう(ServerProcess.write が command + \"\\n\" をそのまま stdin に書くため)。ユーザー入力を渡す拡張は改行のサニタイズが必須。"
+      "write_server_in() は渡した文字列に改行を含めると複数コマンドとして注入されてしまう(ServerProcess.write が command + \"\\n\" をそのまま stdin に書くため)。ユーザー入力を渡す拡張は改行のサニタイズが必須。",
+      "ctx.use_stop はサーバープロセス終了時に「意図的な停止か/クラッシュか」を区別する内部フラグに見えるが、クラッシュ検知時も stdout.py の読み取りスレッドが即座に True へ強制するため、外部から定期ポーリングする拡張機能ではこの2つを信頼して区別できない。'クラッシュ検知' を謳う拡張は誤検知(通常の/stop/ restartでも発火)するため実装しない。"
     ]
   },
+  "review_pass_2026-07-24": "1人目(ユーザー)がquick-commandsの冗長性を指摘、それを踏まえて2人目(共同開発者エージェント)に全アイデアの要否をレビューさせた。以下 extensions[] の status はそのレビュー後の最終結論。",
   "extensions": [
     {
       "id": "quick-commands",
       "name": "クイックコマンド",
       "status": "rejected",
-      "priority": "n/a",
       "category": "minecraft-vanilla-like",
-      "compatible_servers": ["vanilla", "paper", "spigot", "fabric", "forge"],
-      "summary": "weather / time / gamemode / difficulty / say など、よく使うバニラ系コンソールコマンドを選択式スラッシュコマンドとしてラップする案。",
-      "features": [
-        "/extension-quick-commands weather <clear|rain|thunder>",
-        "/extension-quick-commands time <day|noon|night|midnight>",
-        "/extension-quick-commands gamemode <mode> <player>",
-        "/extension-quick-commands difficulty <peaceful|easy|normal|hard>",
-        "/extension-quick-commands say <message> (改行をサニタイズしてブロードキャスト)"
-      ],
-      "apis_used": ["extension_commands_group", "write_server_in", "user_permission", "not_enough_permission", "print_user"],
-      "notes": "一度実装したが却下。コアBotの /cmd serverin (allow_cmd で許可されたコマンドを自由入力で送信可能) と、ターミナルチャンネル (メッセージをそのまま ctx.server_process.write する生パススルー、bot/events.py) で既に同じことができるため、選択式UIという見た目の違いしかなく拡張機能として作る意味がなかった。"
+      "summary": "weather / time / gamemode / difficulty / say を選択式スラッシュコマンド化する案。",
+      "notes": "却下(既存)。コアBotの /cmd serverin (config の allow_mccmd に名前を足すだけで同じことができる) とターミナルチャンネルの生パススルーで完全に代替可能なため、拡張機能として作る意味がない。"
     },
     {
       "id": "auto-announce",
-      "name": "定期アナウンス",
+      "name": "定期アナウンス(季節メッセージ対応)",
       "status": "implemented",
-      "priority": "medium",
       "category": "general",
       "compatible_servers": ["any"],
-      "summary": "設定した間隔でサーバー内(write_server_in の say)とDiscordの両方に定型メッセージを自動送信する。",
+      "summary": "設定した間隔でサーバー内(write_server_in の say)とDiscordの両方に定型メッセージを自動送信する。各メッセージに任意で日付(MM-DD)を指定すると、その日付近辺だけ送信される(季節イベント告知を兼ねる)。",
       "features": [
         "append_task によるループ登録",
-        "/extension-auto-announce list / add / remove でメッセージ管理",
+        "/extension-auto-announce list / add / remove でメッセージ管理 (add に date 引数で季節限定メッセージも登録可能)",
         "/extension-auto-announce config で間隔・送信先(サーバー/Discordチャンネル)を設定"
       ],
       "apis_used": ["append_task", "write_server_in", "extension_commands_group", "bot.client.client"],
-      "notes": "quick-commands の反省を踏まえて選定。/cmd serverin やターミナルチャンネルは一発コマンドしか送れず「N分おきに繰り返す」自動化はできないため、append_task を使う拡張機能として明確に価値がある。設定はJSON(state.json)で拡張機能ディレクトリ内に永続化。"
-    },
-    {
-      "id": "uptime",
-      "name": "稼働時間表示",
-      "status": "planned",
-      "priority": "low",
-      "category": "general",
-      "compatible_servers": ["any"],
-      "summary": "拡張ロード時刻を起点にBotプロセスの稼働時間を表示するコマンド。",
-      "features": ["/extension-uptime now"],
-      "apis_used": ["extension_commands_group"],
-      "notes": "サーバー本体の起動時刻はAPI経由で取得できないため、あくまで拡張ロード後の経過時間になる点を明記する。"
+      "notes": "review_pass_2026-07-24: 元々別案だった seasonal-announcer は独立拡張にするほどの差分が無いと判断し、date絞り込みオプションとしてこちらへ統合(MERGE)。"
     },
     {
       "id": "whitelist-ops-viewer",
       "name": "ホワイトリスト/OP一覧表示",
-      "status": "planned",
-      "priority": "medium",
+      "status": "implemented",
       "category": "minecraft-vanilla-like",
       "compatible_servers": ["vanilla", "paper", "spigot", "fabric", "forge"],
       "summary": "ctx.server_path 配下の whitelist.json / ops.json / banned-players.json を読み取り、埋め込みで一覧表示する。",
@@ -79,126 +59,113 @@
         "/extension-whitelist-ops-viewer ops",
         "/extension-whitelist-ops-viewer bans"
       ],
-      "apis_used": ["extension_commands_group", "user_permission"],
-      "notes": "ファイル未存在時のフォールバック処理が必要。読み取り専用にして書き込みは行わない。"
+      "apis_used": ["extension_commands_group", "ctx.server_path"],
+      "notes": "review_pass_2026-07-24: KEEP。コアの /cmd stdin ls / send-discord はファイルの存在確認や転送はできてもJSONを整形表示しないため、実際のギャップを埋める。読み取り専用。"
     },
     {
       "id": "restart-warning-timer",
       "name": "再起動予告タイマー",
-      "status": "planned",
-      "priority": "medium",
+      "status": "implemented",
       "category": "minecraft-vanilla-like",
       "compatible_servers": ["vanilla", "paper", "spigot", "fabric", "forge"],
-      "summary": "定期再起動の前に 10分前/5分前/1分前 と段階的にサーバー内へ警告broadcastする。",
+      "summary": "指定分数後を目標に、10分前/5分前/1分前/0分 と段階的にサーバー内へ警告broadcastする。実際の停止はコアBotの /restart や /server stop に委ねる。",
       "features": [
         "/extension-restart-warning-timer schedule <minutes>",
         "/extension-restart-warning-timer cancel"
       ],
       "apis_used": ["append_task", "write_server_in", "extension_commands_group"],
-      "notes": "実際の停止処理はコアBotの /server stop に委ねる(拡張からは直接プロセス終了させない)想定。"
+      "notes": "review_pass_2026-07-24: KEEP。コアの /restart は即時実行のみで予告機能が無いため、そこを補完する。"
     },
     {
       "id": "disk-space-watchdog",
       "name": "ディスク容量監視",
-      "status": "planned",
-      "priority": "medium",
+      "status": "implemented",
       "category": "general",
       "compatible_servers": ["any"],
-      "summary": "定期的に shutil.disk_usage でサーバー設置先ドライブの空き容量をチェックし、閾値を下回ったらDiscordへ警告する。",
-      "features": ["append_taskで数分おきにチェック", "/extension-disk-space-watchdog status で現在値を即時表示"],
-      "apis_used": ["append_task", "extension_commands_group", "extension_logger"],
-      "notes": "Discordへの能動通知にはterminalチャンネルまたは専用チャンネルIDの設定が必要。"
+      "summary": "定期的に shutil.disk_usage でサーバー設置先ドライブの空き容量をチェックし、閾値を下回ったらDiscordへ警告する(復帰したら再度警告可能な状態に戻す)。",
+      "features": ["append_taskで定期チェック", "/extension-disk-space-watchdog status で現在値を即時表示", "/extension-disk-space-watchdog config で閾値・間隔・通知先チャンネルを設定"],
+      "apis_used": ["append_task", "extension_commands_group", "extension_logger", "bot.client.client"],
+      "notes": "review_pass_2026-07-24: KEEP。自宅サーバー運用でディスク枯渇は実際に起こる失敗モードで、コアBotに監視機能が無い。"
     },
     {
-      "id": "backup-reminder",
-      "name": "バックアップリマインダー",
-      "status": "planned",
-      "priority": "low",
+      "id": "backup-watch",
+      "name": "バックアップ監視(未実施リマインド + 古いバックアップ自動整理)",
+      "status": "implemented",
       "category": "general",
       "compatible_servers": ["any"],
-      "summary": "最後にバックアップを取ってからの経過時間を追跡し、一定時間を超えたらDiscordへ実行を促す通知を送る。",
-      "features": ["append_taskによる定期チェック", "/extension-backup-reminder last で最終バックアップ確認"],
-      "apis_used": ["append_task", "extension_commands_group"],
-      "notes": "バックアップ実施タイミングの検知手段が拡張APIに無いため、まずは手動記録コマンド(/extension-backup-reminder mark)から開始する。"
+      "summary": "旧案 backup-reminder と stale-backup-pruner を1つの拡張に統合。ctx.backup_path を直接走査するため手動記録が不要で、最終バックアップ経過時間の通知と、保持期間を超えた古いバックアップの自動削除の両方を提供する。",
+      "features": [
+        "/extension-backup-watch last — 最終バックアップからの経過時間を表示",
+        "/extension-backup-watch prune-now — 保持期間を超えたバックアップを即時削除(要上位権限)",
+        "/extension-backup-watch config — リマインド閾値・保持日数・自動削除有無・通知先チャンネルを設定",
+        "append_task で定期チェックし、未実施が閾値を超えたらDiscord通知、auto_prune有効時は古いバックアップを自動削除"
+      ],
+      "apis_used": ["append_task", "extension_commands_group", "ctx.backup_path", "bot.client.client"],
+      "notes": "review_pass_2026-07-24: 元々2案(backup-reminder: MERGE元, stale-backup-pruner: 共同開発者の新規提案)。ctx.backup_path のファイル名 (YYYY-MM-DD_HH_MM_SS-<name>) から日時を直接パースできるため『手動記録』は不要と判明し、完全自動化して統合した。"
+    },
+    {
+      "id": "downtime-notifier",
+      "name": "予期しないダウン通知",
+      "status": "implemented",
+      "category": "general",
+      "compatible_servers": ["any"],
+      "summary": "サーバープロセスが稼働中→停止に変わったことを検知し、一定の猶予時間(既定2分)経っても再起動されない場合にDiscordへ通知する。",
+      "features": ["append_task で状態遷移を監視", "/extension-downtime-notifier config で猶予時間・通知先チャンネルを設定"],
+      "apis_used": ["append_task", "extension_commands_group", "ctx.server_process", "bot.client.client"],
+      "notes": "review_pass_2026-07-24: 共同開発者の提案『crash-restart-watchdog』を再設計。ctx.use_stop はクラッシュ時も stdout.py の読み取りスレッドが即座に True を強制するため、外部ポーリングでは『クラッシュ』と『意図的な停止』を区別できないと判明(known_limitationsに記載)。誤って/stop の度に「クラッシュ検知」と表示するのは有害なので、原因を断定しない中立的な『ダウン通知』に落とした。/restart はBotプロセスごと再起動され拡張タスクも道連れに再ロードされるため、このループが/restart自体を誤検知することはない。"
+    },
+    {
+      "id": "idle-hours-notice",
+      "name": "静かな時間帯の告知",
+      "status": "implemented",
+      "category": "general",
+      "compatible_servers": ["any"],
+      "summary": "設定した時間帯(既定 深夜0時〜6時)の開始時刻に1日1回、監視が手薄になる旨をDiscordへ通知する。",
+      "features": ["append_task で時刻ベースにチェックし1日1回だけ発火", "/extension-idle-hours-notice config で時間帯・通知先チャンネルを設定"],
+      "apis_used": ["append_task", "extension_commands_group", "bot.client.client"],
+      "notes": "review_pass_2026-07-24: 共同開発者の新規提案。実用性は他案より弱いが『身内で遊ぶ時間を合わせる合図』として最小構成で実装。"
     },
     {
       "id": "custom-whitelist-request",
       "name": "ホワイトリスト申請フロー",
-      "status": "planned",
-      "priority": "medium",
+      "status": "cut",
       "category": "minecraft-vanilla-like",
-      "compatible_servers": ["vanilla", "paper", "spigot", "fabric", "forge"],
-      "summary": "一般ユーザーが /extension-custom-whitelist-request add <username> で申請し、権限者が承認したら write_server_in で whitelist add を実行する簡易申請制ホワイトリスト。",
-      "features": [
-        "/extension-custom-whitelist-request add <username>",
-        "/extension-custom-whitelist-request approve <username> (要権限)",
-        "/extension-custom-whitelist-request pending"
-      ],
-      "apis_used": ["extension_commands_group", "write_server_in", "user_permission", "not_enough_permission"],
-      "notes": "username は英数字とアンダースコアのみに正規表現で制限し、write_server_inへの注入を防止する。"
+      "notes": "review_pass_2026-07-24: CUT。管理者1名の身内サーバーでは申請→承認のワークフローを作る手間に対して、管理者自身が /cmd serverin whitelist add を叩く方が速い。"
+    },
+    {
+      "id": "uptime",
+      "name": "稼働時間表示",
+      "status": "cut",
+      "category": "general",
+      "notes": "review_pass_2026-07-24: CUT。拡張ロード時刻起点の値しか出せず実際のサーバー稼働時間ではないため誤解を招く上、/status で稼働状態自体はすでに見える。"
     },
     {
       "id": "dice-omikuji",
       "name": "サイコロ/おみくじ",
-      "status": "planned",
-      "priority": "low",
+      "status": "cut",
       "category": "general-fun",
-      "compatible_servers": ["any"],
-      "summary": "サーバーに依存しない遊び心コマンド。サイコロや今日の運勢をDiscord上で楽しむ。",
-      "features": ["/extension-dice-omikuji roll <面数>", "/extension-dice-omikuji fortune"],
-      "apis_used": ["extension_commands_group"],
-      "notes": "外部APIやサーバー操作に依存しないため実装難易度が最も低く、拡張機能の最初のサンプルとしても良い候補。"
+      "notes": "review_pass_2026-07-24: CUT。サーバー管理と無関係な娯楽コマンドで、実運用で継続的に使われる見込みが薄い。"
+    },
+    {
+      "id": "safe-console-whitelist",
+      "name": "安全コンソール(コマンド許可リスト方式)",
+      "status": "cut",
+      "category": "general",
+      "notes": "review_pass_2026-07-24: CUT(冗長性を共同開発者エージェントが確認)。core/config_types.py の ServeInConfig.allow_cmd がまさに同じ機能(コマンド名の許可リスト)を提供済みで、config に名前を追加するだけで済む。拡張として再実装する理由がない。"
     },
     {
       "id": "tps-lag-report",
       "name": "TPS/ラグレポート",
       "status": "blocked",
-      "priority": "low",
       "category": "minecraft-vanilla-like",
-      "compatible_servers": ["paper", "spigot", "forge"],
-      "summary": "コンソールへ /forge tps 等を送り、その応答を解析してDiscordへ表示する。",
-      "features": ["/extension-tps-lag-report now"],
-      "apis_used": ["write_server_in", "(未提供) サーバー標準出力の読み取りフック"],
-      "notes": "コンソール応答を拡張側で受け取る手段が現状の拡張APIに無いため、公式の「フック機能(計画中)」が実装されるまで着手不可。"
-    },
-    {
-      "id": "safe-console-whitelist",
-      "name": "安全コンソール(コマンド許可リスト方式)",
-      "status": "planned",
-      "priority": "medium",
-      "category": "general",
-      "compatible_servers": ["any"],
-      "summary": "本体の /terminal より粒度の細かい権限で、拡張側が事前定義したコマンドテンプレートのみ実行を許可する簡易コンソール。",
-      "features": [
-        "/extension-safe-console-whitelist run <template名> [引数]",
-        "テンプレートはこの拡張機能ディレクトリ内のJSONで管理"
-      ],
-      "apis_used": ["write_server_in", "extension_commands_group", "user_permission"],
-      "notes": "任意コマンド実行ではなく、事前登録されたテンプレートの穴埋めのみを許可することで注入リスクを抑える。"
-    },
-    {
-      "id": "seasonal-announcer",
-      "name": "季節イベント告知",
-      "status": "planned",
-      "priority": "low",
-      "category": "general-fun",
-      "compatible_servers": ["any"],
-      "summary": "日付に応じて(ハロウィン/クリスマス/正月など)自動でサーバー内/Discordへ挨拶を送る。",
-      "features": ["append_taskで日次チェックし、該当日のみ送信"],
-      "apis_used": ["append_task", "write_server_in"],
-      "notes": "auto-announce と設定フォーマットを共通化できないか検討する。"
+      "notes": "サーバーの標準出力を読み取るフックが無いため、公式の「フック機能(計画中)」が実装されるまで着手不可。"
     },
     {
       "id": "cross-server-relay",
       "name": "複数サーバー間チャット中継",
-      "status": "planned",
-      "priority": "low",
+      "status": "cut",
       "category": "advanced",
-      "compatible_servers": ["any"],
-      "summary": "同じDiscordサーバーで複数の server-bot-v3 インスタンス(=複数ゲームサーバー)を運用している場合に、各サーバーのチャットをWebhook経由で相互中継する。",
-      "features": ["Webhook URLを拡張機能側の設定JSONに登録して相互送信"],
-      "apis_used": ["write_server_in", "extension_commands_group", "extension_logger"],
-      "notes": "対象読者が限定的な上級者向け拡張。他アイデアが安定してから着手する優先度低めの案。"
+      "notes": "review_pass_2026-07-24: CUT。現在の運用はサーバー1台のみで、複数インスタンス運用というユースケース自体が発生していない。"
     }
   ]
 }

@@ -1,3 +1,6 @@
 __pycache__/
 *.pyc
 .venv/
+
+# 各拡張機能が初回実行時に自動生成するランタイム設定(配布物には含めない)
+mikanassets/extension/*/state.json

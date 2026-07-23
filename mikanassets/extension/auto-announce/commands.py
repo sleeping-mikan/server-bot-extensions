@@ -6,15 +6,21 @@ auto-announce — 定型メッセージを一定間隔でサーバー内 / Disco
 (discord.ext.tasks によるバックグラウンドループ) を使わないと実現できず、拡張機能を
 作る意味がある領域。
 
+各メッセージには任意で date (MM-DD) を指定できる。指定した場合、その日付と一致する
+日にしか送信されない(季節イベント告知を兼ねる)。
+
 登録される全コマンド: /extension-auto-announce <add|remove|list|config>
 """
 
 from __future__ import annotations
 
 import json
+import re
+from datetime import date as date_cls
 from pathlib import Path
 
 import discord
+from discord import app_commands
 from discord.ext import tasks
 
 from bot.client import client
@@ -31,12 +37,13 @@ REQUIRED_LEVEL = 1
 
 _STATE_FILE = Path(__file__).parent / "state.json"
 _TICK_SECONDS = 30
+_DATE_PATTERN = re.compile(r"^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$")
 _DEFAULT_STATE = {
     "interval_minutes": 30,
     "to_server": True,
     "to_discord": False,
     "discord_channel_id": None,
-    "messages": [],
+    "messages": [],  # [{"text": str, "date": "MM-DD" | None}, ...]
 }
 
 
@@ -46,7 +53,13 @@ def _load_state() -> dict:
     try:
         with _STATE_FILE.open("r", encoding="utf-8") as f:
             data = json.load(f)
-        return {**_DEFAULT_STATE, **data}
+        merged = {**_DEFAULT_STATE, **data}
+        # 旧バージョン(文字列のみのリスト)からの互換読み込み
+        merged["messages"] = [
+            {"text": m, "date": None} if isinstance(m, str) else m
+            for m in merged["messages"]
+        ]
+        return merged
     except Exception as e:
         logger.error(f"failed to load state, using defaults ({e})")
         return dict(_DEFAULT_STATE)
@@ -80,12 +93,14 @@ async def _broadcast(message: str) -> None:
             await channel.send(message)
 
 
+def _active_messages() -> list[dict]:
+    today = date_cls.today().strftime("%m-%d")
+    return [m for m in _state["messages"] if m["date"] in (None, today)]
+
+
 @tasks.loop(seconds=_TICK_SECONDS)
 async def _announce_loop() -> None:
     global _elapsed_seconds, _cursor
-
-    if not _state["messages"]:
-        return
 
     _elapsed_seconds += _TICK_SECONDS
     interval_seconds = max(1, _state["interval_minutes"]) * 60
@@ -93,10 +108,14 @@ async def _announce_loop() -> None:
         return
     _elapsed_seconds = 0
 
-    message = _state["messages"][_cursor % len(_state["messages"])]
+    active = _active_messages()
+    if not active:
+        return
+
+    entry = active[_cursor % len(active)]
     _cursor += 1
-    logger.info(f"announce -> {message}")
-    await _broadcast(message)
+    logger.info(f"announce -> {entry['text']}")
+    await _broadcast(entry["text"])
 
 
 append_task(_announce_loop)
@@ -117,16 +136,21 @@ async def _check_permission(interaction: discord.Interaction) -> bool:
 
 
 @tree.command(name="add", description="定期アナウンスするメッセージを追加する")
-async def add_command(interaction: discord.Interaction, message: str) -> None:
+@app_commands.describe(date="季節限定にする場合のみ指定 (MM-DD形式、例: 12-25)")
+async def add_command(interaction: discord.Interaction, message: str, date: str | None = None) -> None:
     if not await _check_permission(interaction):
         return
     sanitized = _sanitize(message)
     if not sanitized:
         await interaction.response.send_message("メッセージが空です", ephemeral=True)
         return
-    _state["messages"].append(sanitized)
+    if date is not None and not _DATE_PATTERN.match(date):
+        await interaction.response.send_message("date は MM-DD 形式で指定してください (例: 12-25)", ephemeral=True)
+        return
+    _state["messages"].append({"text": sanitized, "date": date})
     _save_state()
-    await interaction.response.send_message(f"追加しました ({len(_state['messages'])}件目): {sanitized}")
+    suffix = f" ({date}限定)" if date else ""
+    await interaction.response.send_message(f"追加しました ({len(_state['messages'])}件目){suffix}: {sanitized}")
 
 
 @tree.command(name="remove", description="登録済みメッセージを削除する")
@@ -138,7 +162,7 @@ async def remove_command(interaction: discord.Interaction, index: int) -> None:
         return
     removed = _state["messages"].pop(index - 1)
     _save_state()
-    await interaction.response.send_message(f"削除しました: {removed}")
+    await interaction.response.send_message(f"削除しました: {removed['text']}")
 
 
 @tree.command(name="list", description="設定と登録済みメッセージを表示する")
@@ -147,7 +171,10 @@ async def list_command(interaction: discord.Interaction) -> None:
     embed.add_field(name="間隔", value=f"{_state['interval_minutes']}分", inline=True)
     embed.add_field(name="サーバー内送信", value=str(_state["to_server"]), inline=True)
     embed.add_field(name="Discord送信", value=str(_state["to_discord"]), inline=True)
-    body = "\n".join(f"{i}. {m}" for i, m in enumerate(_state["messages"], start=1)) or "(未登録)"
+    body = "\n".join(
+        f"{i}. {m['text']}" + (f" ({m['date']}限定)" if m["date"] else "")
+        for i, m in enumerate(_state["messages"], start=1)
+    ) or "(未登録)"
     embed.add_field(name="メッセージ一覧", value=body, inline=False)
     await interaction.response.send_message(embed=embed)
 

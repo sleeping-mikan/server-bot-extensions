@@ -139,35 +139,23 @@ rcon.password=<空でない値>
 - `/extension-rcon effect give|clear`
 - `/extension-rcon whitelist add|remove|list`
 - `/extension-rcon player ban|pardon|kick|op|deop`(要上位権限)
-- `/extension-rcon execute run <chain>` — execute の続き(as/at/if等)をそのまま実行(1回呼び出し、非構造化)
+- `/extension-rcon execute run <chain>` — execute の続き(as/at/if等)をそのまま実行
 - `/extension-rcon execute as|at|if-entity <selector> <command>` — よく使う execute パターンのショートカット
 - `/extension-rcon execute custom` — as/at/positioned/rotated/facing/anchored/align/in/if_entity/
   unless_entity/if_block/if_score を個別の型付き引数として指定し、固定順で組み立てて実行する
   (**各修飾子は1回まで**、繰り返し・入れ子は非対応)
-- `/extension-rcon execute builder` — ボタン/セレクト/モーダルで**対話的に**チェインを組み立てる。
-  修飾子を何回でも追加でき、「ここに execute を入れ子にする」で再帰的なネストにも対応
 
 `execute` の**機能**自体は `run`(任意のチェインをそのままRCONへ渡すだけ)の時点で100%再現できています
-— コンソールで打てることは全部打てます。`custom` が再現できていなかったのは、「chain全体を
-1個のDiscordスラッシュコマンドの個別の型付き引数として表現しきる」方でした。
+— コンソールで打てることは全部打てます。`custom` が再現できていないのは、「chain全体を
+1個のDiscordスラッシュコマンドの個別の型付き引数として表現しきる」方です。
 
 これは単に「引数を増やせば足りる」話ではありません。`run` が実行するコマンドには `execute` 自身も
-指定できるため、chainは理論上無限に再帰します:
+指定できるため、chainは理論上無限に再帰します(例: `execute as X at Y as Z run execute at W run
+execute ... run <command>`)。同じ修飾子の繰り返しも、execute-in-runの入れ子も、どちらも深さに
+上限がなく、有限個のフィールドしか持てないスラッシュコマンドでは原理的に表現しきれません。
 
-```
-execute as X at Y as Z run execute at W run execute ... run <command>
-```
-
-同じ修飾子の繰り返しも、execute-in-runの入れ子も、どちらも深さに上限がありません。有限個の
-フィールドしか持てない**1回のスラッシュコマンド呼び出し**では、この再帰構造を原理的に表現しきれません。
-
-そこで `builder` は「1回の呼び出し」という制約自体を外し、Discordのボタン/モーダルで1修飾子ずつ
-何度でも追加できる対話フローにしました。「何度でも繰り返し追加できる」ことと「run の対象として、
-コマンドの代わりに新しい execute チェインを入れ子(子ビルダー)で開始できる」ことの組み合わせにより、
-execute が実際に表現しうるチェインを理論上すべてカバーします(繰り返し・再帰入れ子を含む)。
-`custom` は「各修飾子1回ずつ」というよく使う範囲を素早く1コマンドで組み立てたい場合の高速な近道として、
-`builder` とは別に残しています。
-
-`builder` の対話フロー・入れ子(再帰)による連結ロジックは、実際の discord.py 2.3.2 をロードした
-ユニットテストで検証済みです(`execute as @a run execute at @s run say nested` のような入れ子の
-組み立て結果まで確認しています)。
+これに対しては、Discordのボタン/モーダルで1修飾子ずつ何度でも追加できる対話的なビルダーUIを
+作れば理論上は完全に再現できることを確認し、実際に実装・動作検証まで行いましたが、
+「そこまでは要らない」という判断で最終的には見送りました。繰り返し・入れ子が必要なケースは
+`custom` ではなく `run` に生のチェインをそのまま書いてください(コンソールで打てる書き方が
+そのまま通ります)。

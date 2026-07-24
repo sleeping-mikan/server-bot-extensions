@@ -16,6 +16,7 @@ mikanassets/
     backup-watch/commands.py                 ← バックアップ未実施リマインド + 自動整理
     downtime-notifier/commands.py            ← 予期しないダウン通知
     rcon/commands.py                         ← RCON経由コマンド実行(確実な結果取得 + エイリアス多数)
+    world-visualizer/commands.py             ← ワールド全体マップ画像 + プレイヤー所持品画像
 ```
 
 `mikanassets/` 以下は server-bot-v3 が実際に読み込むディレクトリ構成と同じです。
@@ -220,3 +221,25 @@ config["discord_commands"]["permission"]["commands_level"]`)。
 > 以前 `rcon cmd` のような旧キー名で `.config` に登録されていた場合、そのキーは新キー名
 > (`extension-rcon cmd`)には自動移行されません。まだ配布前で影響範囲が手元の環境に
 > 限られるため、移行ロジックは実装せず、不要になった旧キーは手動で削除する運用としています。
+
+### world-visualizer
+
+ワールドのリージョンファイル(.mca)とプレイヤーの playerdata(.dat)を直接読み取り、
+画像として表示する拡張機能です。RCONやサーバーの標準出力に依存しない読み取り専用実装のため、
+サーバーが停止中でも動作します。
+
+- `/extension-world-visualizer map [dimension=overworld|nether|end]` — チャンクごとの
+  地表バイオーム+標高から簡易的な俯瞰マップ画像を1枚合成して返します。ブロック単位の質感までは
+  再現しない簡易版で、探索範囲が広い場合は自動的に間引いてサンプリングします(embedの
+  「サンプリング間隔」欄で確認できます)。
+- `/extension-world-visualizer inventory <player>` — `usercache.json` で名前からUUIDを引き、
+  playerdataからメインインベントリ+ホットバーをグリッド画像として、防具/オフハンドをテキストで
+  表示します。オフライン中のプレイヤーでも参照できます(直近のオートセーブ時点のデータです)。
+
+**前提**: 画像合成に [Pillow](https://pypi.org/project/Pillow/) が必要です(`pip install Pillow`)。
+未インストールの場合は両コマンドとも案内embedを返すだけで、他の拡張機能には影響しません。
+
+チャンクデータ形式は 1.18 以降(sections直下・Heightmaps・セクション毎biomesパレット)を
+前提にしているため、1.17以前のワールドでは `map` が正しく描画できない場合があります
+(詳しい制約は `commands.py` 冒頭のdocstringを参照)。読み取り専用のため権限チェックは
+設けていません(`whitelist-ops-viewer` と同様)。

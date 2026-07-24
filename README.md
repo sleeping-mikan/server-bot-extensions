@@ -174,15 +174,18 @@ config["discord_commands"]["permission"]["commands_level"]`)。
 
 `rcon` 拡張は最初 `state.json` 側に独自の権限設定を持たせていましたが、それだと
 このBotの他の全コマンドとは別の場所・別の仕組みで権限を管理することになり不整合でした。
-そのため `rcon` の各コマンドも `"rcon <サブコマンド名>"` というキーで**同じ
-`commands_level` 辞書**を直接参照する設計に変更しています。`.config` にキーが
+そのため `rcon` の各コマンドも `"extension-rcon <サブコマンド名>"` というキーで**同じ
+`commands_level` 辞書**を直接参照する設計に変更しています。キー名は実際のスラッシュ
+コマンド(`/extension-rcon cmd` 等 — `bot/extensions.py` が拡張フォルダ名 `rcon` の頭に
+`extension-` を自動で付ける)とそのまま一致させています(単に `rcon cmd` 名義にしていた
+初期実装は、キー名と実コマンド名が食い違うため修正しました)。`.config` にキーが
 存在すればその値を、無ければ以下のデフォルト値を使います:
 
 | デフォルトレベル | 対象コマンド(`.config`でのキー例) |
 |---|---|
-| 0(誰でも) | `rcon check`, `rcon list`, `rcon whitelist list` |
-| 1 | `rcon gamemode`, `rcon weather`, `rcon time`, `rcon difficulty`, `rcon say`, `rcon tp`, `rcon give`, `rcon xp`, `rcon summon`, `rcon setblock`, `rcon title`, `rcon effect give`, `rcon effect clear`, `rcon whitelist add`, `rcon whitelist remove` |
-| 2 | `rcon config`, `rcon cmd`(任意コマンド)、`rcon kill`、`rcon player ban/pardon/kick/op/deop` |
+| 0(誰でも) | `extension-rcon check`, `extension-rcon list`, `extension-rcon whitelist list` |
+| 1 | `extension-rcon gamemode`, `extension-rcon weather`, `extension-rcon time`, `extension-rcon difficulty`, `extension-rcon say`, `extension-rcon tp`, `extension-rcon give`, `extension-rcon xp`, `extension-rcon summon`, `extension-rcon setblock`, `extension-rcon title`, `extension-rcon effect give`, `extension-rcon effect clear`, `extension-rcon whitelist add`, `extension-rcon whitelist remove` |
+| 2 | `extension-rcon config`, `extension-rcon cmd`(任意コマンド)、`extension-rcon kill`、`extension-rcon player ban/pardon/kick/op/deop` |
 
 権限レベルを変更したい場合は、Discordコマンドではなく `.config` を直接編集してください。例:
 
@@ -190,22 +193,30 @@ config["discord_commands"]["permission"]["commands_level"]`)。
 "discord_commands": {
   "permission": {
     "commands_level": {
-      "rcon cmd": 3,
-      "rcon gamemode": 0
+      "extension-rcon cmd": 3,
+      "extension-rcon gamemode": 0
     }
   }
 }
 ```
 
-`rcon cmd` は `allow_cmd` のような許可リストを一切通さない無条件の生コマンド実行なので、
-コアBotの `/cmd serverin`(既定 level 1)より一段高いデフォルト level 2 にしています。
+`extension-rcon cmd` は `allow_cmd` のような許可リストを一切通さない無条件の生コマンド実行
+なので、コアBotの `/cmd serverin`(既定 level 1)より一段高いデフォルト level 2 にしています。
 
-**キーは自動的に追加されます。** `.config` に `"rcon cmd"` のようなキーがまだ存在しない場合、
-拡張ロード時にデフォルト値で登録し、そのまま**その場で** `.config` ファイルへ書き戻します
-(コアBotが `core/config_loader.py` の起動時処理で自身のコマンドの権限キーを補完しているのと
-同じ考え方です)。拡張のロードは Discord のイベントループが始まる前の同期的な起動フェーズで
-行われるため、コマンド実行を待つ必要がなく即座に反映できます。既に手動で値を設定してある
-キーは上書きされません。つまり、Botを一度起動するだけで `.config` を開けば
-`"rcon cmd": 2` のように全キーが既に並んだ状態になっており、変更したい値だけ書き換えれば
-済みます。また `ctx.text.command_permission` はコアBotの `/permission view <user>
-detail:true` が一覧表示する辞書そのものなので、rconのキーもそこに一緒に表示されます。
+**キーは自動的に追加されます。** `.config` に `"extension-rcon cmd"` のようなキーがまだ
+存在しない場合、拡張ロード時にデフォルト値で登録し、そのまま**その場で** `.config` ファイルへ
+書き戻します(コアBotが `core/config_loader.py` の起動時処理で自身のコマンドの権限キーを
+補完しているのと同じ考え方です)。拡張のロードは Discord のイベントループが始まる前の
+同期的な起動フェーズで行われるため、コマンド実行を待つ必要がなく即座に反映できます。既に
+手動で値を設定してあるキーは上書きされません。つまり、Botを一度起動するだけで `.config` を
+開けば `"extension-rcon cmd": 2` のように全キーが既に並んだ状態になっており、変更したい値
+だけ書き換えれば済みます。また `ctx.text.command_permission` はコアBotの
+`/permission view <user> detail:true` が一覧表示する辞書そのものなので、rconのキーも
+そこに一緒に表示されます(この一覧表示自体もキー数増加でDiscordのフィールド文字数上限に
+引っかかっていたため、コアBot側の `bot/commands/permission.py` を複数フィールドに
+分割するよう修正済みです)。
+
+> [!NOTE]
+> 以前 `rcon cmd` のような旧キー名で `.config` に登録されていた場合、そのキーは新キー名
+> (`extension-rcon cmd`)には自動移行されません。まだ配布前で影響範囲が手元の環境に
+> 限られるため、移行ロジックは実装せず、不要になった旧キーは手動で削除する運用としています。

@@ -342,7 +342,7 @@ async def _run(interaction: discord.Interaction, command: str, *, required: int)
 
     logger.info(f"rcon -> {command!r} -> {result!r}")
     embed = ModifiedEmbeds.DefaultEmbed(title=f"/{command}")
-    embed.add_field(name="結果", value=f"```{(result or '(応答なし)')[:1000]}```", inline=False)
+    embed.add_field(name="", value=f"```{(result or '(応答なし)')[:1000]}```", inline=False)
     await interaction.followup.send(embed=embed)
 
 

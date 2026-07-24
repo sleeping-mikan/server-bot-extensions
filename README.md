@@ -141,8 +141,14 @@ rcon.password=<空でない値>
 - `/extension-rcon player ban|pardon|kick|op|deop`(要上位権限)
 - `/extension-rcon execute run <chain>` — execute の続き(as/at/if等)をそのまま実行
 - `/extension-rcon execute as|at|if-entity <selector> <command>` — よく使う execute パターンのショートカット
+- `/extension-rcon execute custom` — as/at/positioned/rotated/facing/anchored/align/in/if_entity/
+  unless_entity/if_block/if_score を個別の型付き引数として指定し、`as → at → positioned → rotated →
+  facing → anchored → align → in → if/unless → run` の順で自動的に組み立てて実行する
 
-`execute` は as/at/if/unless/positioned 等を自由に連結できる巨大なコマンドで、
-Discordの構造化引数だけで全パターンを再現するのは非現実的なため、`run` で任意チェインを
-そのまま流せるようにしつつ、特に使用頻度の高い `as` / `at` / `if-entity` だけを
-ショートカットとして用意しています。
+`execute` の**機能**自体は `run`(任意のチェインをそのままRCONへ渡すだけ)の時点で100%再現できています
+— コンソールで打てることは全部打てます。再現できていないのはそこではなく、「chain全体を
+1個のDiscordスラッシュコマンドの個別の型付き引数として表現しきる」方です。as/at/positioned/…/if/unless
+は任意個・任意順に何度でも連結できるため、固定スキーマ(引数は最大25個、可変長の繰り返し構造は不可)の
+スラッシュコマンドでは理論上どうやっても全パターンを型付き引数だけでは表現しきれません。
+そこで `custom` で「各修飾子1回ずつ」というよく使う範囲を型付き引数として構造化し、それを超える
+(同じ条件を複数回重ねる等の)ケースは `run` にフォールバックする、という2段構えにしています。

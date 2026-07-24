@@ -452,10 +452,16 @@ tree.add_command(player_group)
 
 
 # ── execute (サブグループ) ────────────────────────────────────────────────────
-# execute は as/at/if/unless/positioned/rotated/facing/store 等を自由に連結できる
-# 巨大なコマンドなので、Discordの構造化引数だけで全パターンを網羅するのは無理がある。
-# 生のチェインをそのまま流せる run と、特に使用頻度の高い as/at/if entity だけを
-# ショートカット化する方針にした。
+# execute の機能そのものは run (任意のチェインをそのまま文字列で渡す) の時点で
+# 100%再現できている(RCONにそのまま渡すだけなので、コンソールで打てることは全部打てる)。
+# 再現できていないのはそこではなく、「chain全体を1個のDiscordスラッシュコマンドの
+# 個別の型付き引数として表現する」方の完全さ: as/at/positioned/rotated/facing/
+# anchored/align/in/if/unless は任意個・任意順に繰り返し連結できるため、
+# 固定スキーマのスラッシュコマンド(最大25引数、可変長の繰り返し構造は不可)では
+# 理論上どうやっても全パターンを型付き引数だけで表現しきれない。
+# そこで custom で「1回ずつなら」というよく使う範囲を型付き引数として構造化し、
+# それを超える(条件を複数回重ねる等の)ケースは run にフォールバックする、という
+# 2段構えにしている。
 
 execute_group = app_commands.Group(name="execute", description="execute コマンドのラッパー")
 
@@ -478,6 +484,97 @@ async def execute_at_command(interaction: discord.Interaction, selector: str, co
 @execute_group.command(name="if-entity", description="execute if entity <selector> run <command> のショートカット")
 async def execute_if_entity_command(interaction: discord.Interaction, selector: str, command: str) -> None:
     await _run(interaction, f"execute if entity {selector} run {_sanitize_text(command)}")
+
+
+def _build_execute_chain(
+    command: str,
+    as_: str | None,
+    at: str | None,
+    positioned: str | None,
+    rotated: str | None,
+    facing: str | None,
+    anchored: str | None,
+    align: str | None,
+    in_: str | None,
+    if_entity: str | None,
+    unless_entity: str | None,
+    if_block: str | None,
+    if_score: str | None,
+) -> str:
+    # Minecraft自体は多くの並びを受け付けるが、ここでは以下の固定順で組み立てる:
+    # as → at → positioned → rotated → facing → anchored → align → in → if/unless → run
+    # (実行対象/位置文脈を先に確定させ、その上で条件判定する、という一般的な使い方に沿った順序)
+    parts: list[str] = []
+    if as_:
+        parts.append(f"as {as_}")
+    if at:
+        parts.append(f"at {at}")
+    if positioned:
+        parts.append(f"positioned {positioned}")
+    if rotated:
+        parts.append(f"rotated {rotated}")
+    if facing:
+        parts.append(f"facing {facing}")
+    if anchored:
+        parts.append(f"anchored {anchored}")
+    if align:
+        parts.append(f"align {align}")
+    if in_:
+        parts.append(f"in {in_}")
+    if if_entity:
+        parts.append(f"if entity {if_entity}")
+    if unless_entity:
+        parts.append(f"unless entity {unless_entity}")
+    if if_block:
+        parts.append(f"if block {if_block}")
+    if if_score:
+        parts.append(f"if score {if_score}")
+    parts.append(f"run {command}")
+    return "execute " + " ".join(parts)
+
+
+@execute_group.command(
+    name="custom",
+    description="よく使うexecute修飾子を個別入力で組み立てる(1種類ずつのみ。複数回の重ねがけはrunを使う)",
+)
+@app_commands.rename(as_="as", in_="in")
+@app_commands.describe(
+    command="最終的に実行するコマンド",
+    as_="実行者を変更するセレクター (execute as)",
+    at="位置/次元/向きの基準にするセレクター (execute at)",
+    positioned="基準位置からの相対/絶対座標 例: ~ ~1 ~ (execute positioned)",
+    rotated="向き 例: 90 0 (execute rotated)",
+    facing="向く先 例: 0 64 0 または entity @p eyes (execute facing)",
+    anchored="位置基準を目/足のどちらにするか (execute anchored)",
+    align="位置を整列させる軸 例: xyz (execute align)",
+    in_="対象ディメンション 例: the_nether (execute in)",
+    if_entity="この条件のエンティティが存在すれば実行 (execute if entity)",
+    unless_entity="この条件のエンティティが存在しなければ実行 (execute unless entity)",
+    if_block="'x y z block' 形式。指定座標が該当ブロックなら実行 (execute if block)",
+    if_score="'score'の後に続く部分をそのまま。例: @s obj matches 1.. (execute if score)",
+)
+async def execute_custom_command(
+    interaction: discord.Interaction,
+    command: str,
+    as_: str | None = None,
+    at: str | None = None,
+    positioned: str | None = None,
+    rotated: str | None = None,
+    facing: str | None = None,
+    anchored: Literal["eyes", "feet"] | None = None,
+    align: str | None = None,
+    in_: str | None = None,
+    if_entity: str | None = None,
+    unless_entity: str | None = None,
+    if_block: str | None = None,
+    if_score: str | None = None,
+) -> None:
+    chain = _build_execute_chain(
+        _sanitize_text(command),
+        as_, at, positioned, rotated, facing, anchored, align, in_,
+        if_entity, unless_entity, if_block, if_score,
+    )
+    await _run(interaction, chain)
 
 
 tree.add_command(execute_group)

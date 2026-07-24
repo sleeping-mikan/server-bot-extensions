@@ -136,10 +136,10 @@
         "/extension-rcon effect give|clear",
         "/extension-rcon whitelist add|remove|list",
         "/extension-rcon player ban|pardon|kick|op|deop (要上位権限)",
-        "/extension-rcon execute run|as|at|if-entity — execute コマンドのラッパー(runは任意チェインをそのまま実行)"
+        "/extension-rcon execute run|as|at|if-entity|custom — execute コマンドのラッパー。runは任意チェインをそのまま実行、customはas/at/positioned/rotated/facing/anchored/align/in/if_entity/unless_entity/if_block/if_scoreを個別の型付き引数として指定し固定順で自動組み立て"
       ],
       "apis_used": ["extension_commands_group", "ctx.server_path (server.propertiesの読み取り)", "asyncio/struct によるRCONクライアント自前実装(追加pip不要)"],
-      "notes": "review_pass_2026-07-24: RCON接続情報(enable-rcon/rcon.port/rcon.password)は server.properties から読み取り、Discordにパスワードを入力させない設計にした。Bot=RCON接続元は同一マシン前提でhostは127.0.0.1固定。フェイクRCONサーバーを立てて認証成功/失敗・空応答・エラーメッセージ応答の4パターンをテスト済み。これによりtps-lag-reportがblockedだった根本原因(標準出力を読む手段が無い)は rcon cmd 経由で実質解消された(下記tps-lag-reportのnotes参照)。"
+      "notes": "review_pass_2026-07-24: RCON接続情報(enable-rcon/rcon.port/rcon.password)は server.properties から読み取り、Discordにパスワードを入力させない設計にした。Bot=RCON接続元は同一マシン前提でhostは127.0.0.1固定。フェイクRCONサーバーを立てて認証成功/失敗・空応答・エラーメッセージ応答の4パターンをテスト済み。これによりtps-lag-reportがblockedだった根本原因(標準出力を読む手段が無い)は rcon cmd 経由で実質解消された(下記tps-lag-reportのnotes参照)。execute run は任意チェインをRCONへそのまま渡すため機能的には100%再現しているが、chain全体を1個のスラッシュコマンドの型付き引数だけで表現しきることは(as/at/if/unless等が任意回連結できる可変長構造なのに対しDiscordの引数は固定スキーマなため)理論上不可能。ユーザーからの指摘を受け、主要修飾子を個別引数化して固定順で組み立てる execute custom を追加し、runへのフォールバックと2段構えにした。組み立てロジックはスタンドアロンのユニットテストで検証済み。"
     },
     {
       "id": "custom-whitelist-request",

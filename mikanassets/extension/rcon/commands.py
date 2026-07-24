@@ -160,9 +160,16 @@ _state = _load_state()
 # ── RCON クライアント (Source RCON プロトコル、標準ライブラリのみ) ──────────────
 # 参考: https://wiki.vg/RCON (Minecraftはこのサブセットを実装している)
 
-_PKT_RESPONSE_OR_EXEC = 0  # SERVERDATA_RESPONSE_VALUE / SERVERDATA_EXECCOMMAND
-_PKT_AUTH_RESPONSE = 2  # SERVERDATA_AUTH_RESPONSE (== EXECCOMMANDと同値だが用途で区別)
-_PKT_AUTH = 3  # SERVERDATA_AUTH
+# 実際のプロトコル値 (wiki.vg/RCON): SERVERDATA_AUTH=3(client→server)、
+# SERVERDATA_AUTH_RESPONSE=2(server→client)、SERVERDATA_EXECCOMMAND=2(client→server)、
+# SERVERDATA_RESPONSE_VALUE=0(server→client)。EXECCOMMANDとAUTH_RESPONSEは値が同じ2だが
+# 送信方向で区別される。以前ここを SERVERDATA_RESPONSE_VALUE(0) と混同して
+# EXECCOMMANDとして送ってしまい、サーバー側で "Unknown request 0" と拒否される
+# バグがあった(0はサーバーが返す側の値であり、クライアントが送る要求種別ではない)。
+_PKT_RESPONSE_VALUE = 0  # SERVERDATA_RESPONSE_VALUE (server → client、コマンド実行結果)
+_PKT_EXECCOMMAND = 2  # SERVERDATA_EXECCOMMAND (client → server、実行するコマンド)
+_PKT_AUTH_RESPONSE = 2  # SERVERDATA_AUTH_RESPONSE (server → client、認証結果)
+_PKT_AUTH = 3  # SERVERDATA_AUTH (client → server、ログイン)
 
 
 class RconError(Exception):
@@ -196,7 +203,7 @@ async def rcon_execute(host: str, port: int, password: str, command: str, timeou
         if auth_id == -1:
             raise RconAuthError("authentication failed (check rcon.password)")
 
-        await _rcon_write_packet(writer, 2, _PKT_RESPONSE_OR_EXEC, command)
+        await _rcon_write_packet(writer, 2, _PKT_EXECCOMMAND, command)
         _, _, payload = await asyncio.wait_for(_rcon_read_packet(reader), timeout=timeout)
         return payload
     finally:

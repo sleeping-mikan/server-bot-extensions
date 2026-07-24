@@ -139,23 +139,29 @@ rcon.password=<空でない値>
 - `/extension-rcon effect give|clear`
 - `/extension-rcon whitelist add|remove|list`
 - `/extension-rcon player ban|pardon|kick|op|deop`(要上位権限)
-- `/extension-rcon execute run <chain>` — execute の続き(as/at/if等)をそのまま実行
-- `/extension-rcon execute as|at|if-entity <selector> <command>` — よく使う execute パターンのショートカット
-- `/extension-rcon execute custom` — as/at/positioned/rotated/facing/anchored/align/in/if_entity/
-  unless_entity/if_block/if_score を個別の型付き引数として指定し、固定順で組み立てて実行する
-  (**各修飾子は1回まで**、繰り返し・入れ子は非対応)
 
-`execute` の**機能**自体は `run`(任意のチェインをそのままRCONへ渡すだけ)の時点で100%再現できています
-— コンソールで打てることは全部打てます。`custom` が再現できていないのは、「chain全体を
-1個のDiscordスラッシュコマンドの個別の型付き引数として表現しきる」方です。
+`execute` チェイン専用のエイリアスは用意していません。`cmd` がRCONへの生コマンド送信そのものなので、
+`cmd command:"execute as @a at @s run say hi"` のように execute チェインをそのまま渡せば済みます。
+専用の execute グループ(run/as/at/if-entity/custom)は一度実装しましたが、`cmd` と機能が完全に
+重複するだけの薄いラッパーだったため撤去しました。経緯は [plan.json](plan.json) の `rcon` エントリの
+`notes` を参照してください。
 
-これは単に「引数を増やせば足りる」話ではありません。`run` が実行するコマンドには `execute` 自身も
-指定できるため、chainは理論上無限に再帰します(例: `execute as X at Y as Z run execute at W run
-execute ... run <command>`)。同じ修飾子の繰り返しも、execute-in-runの入れ子も、どちらも深さに
-上限がなく、有限個のフィールドしか持てないスラッシュコマンドでは原理的に表現しきれません。
+#### rcon の権限レベル
 
-これに対しては、Discordのボタン/モーダルで1修飾子ずつ何度でも追加できる対話的なビルダーUIを
-作れば理論上は完全に再現できることを確認し、実際に実装・動作検証まで行いましたが、
-「そこまでは要らない」という判断で最終的には見送りました。繰り返し・入れ子が必要なケースは
-`custom` ではなく `run` に生のチェインをそのまま書いてください(コンソールで打てる書き方が
-そのまま通ります)。
+このBotの権限レベルは `.config` の `discord_commands.admin.members` でDiscordユーザーごとに
+整数(0〜)を割り当てる仕組みで、コアBotのコマンドも `commands_level`(例: `stop: 1`,
+`backup apply: 3`, `permission change: 4`)でコマンドごとに必要レベルを決めています。
+`rcon` 拡張はこのレベル体系にそのまま乗っかっており、`bot.utils.user_permission()` で
+実行者のレベルを取得し、コマンドごとの閾値と比較しています(`commands.py` の
+`REQUIRED_LEVEL` / `REQUIRED_LEVEL_ADMIN` 定数)。
+
+| レベル | 対象コマンド |
+|---|---|
+| 0(誰でも) | `check`, `list`, `whitelist list` |
+| 1(`REQUIRED_LEVEL`、既定) | `gamemode`, `weather`, `time`, `difficulty`, `say`, `tp`, `give`, `xp`, `summon`, `setblock`, `title`, `effect give/clear`, `whitelist add/remove` |
+| 2(`REQUIRED_LEVEL_ADMIN`) | `cmd`(任意コマンド)、`kill`、`player ban/pardon/kick/op/deop` |
+
+`cmd` は `allow_cmd` のような許可リストを一切通さない無条件の生コマンド実行なので、
+コアBotの `/cmd serverin`(既定 level 1)より一段高い level 2 を要求しています。
+数値の意味自体(どのDiscordユーザーがどのレベルか)はコアBot側の `.config` の設定に依存するため、
+実際に誰が何を実行できるかは各サーバーの `admin.members` 設定を確認してください。

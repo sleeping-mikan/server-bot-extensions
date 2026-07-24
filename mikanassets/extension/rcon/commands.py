@@ -33,9 +33,13 @@ RCON (Source RCON プロトコル、Minecraft Java サーバーが標準対応) 
 
 各コマンドの要求権限レベルは、拡張機能側の state.json ではなく **.config** の
 discord_commands.permission.commands_level に "rcon <サブコマンド名>": <レベル> という
-キーで追記して設定する。これはコアBotの他のコマンド(stop, backup apply 等)と
-全く同じ場所・同じ形式であり、コアBot側にキーが無ければ以下のデフォルト値が使われる
-(詳細は _permission_level() を参照):
+キーで管理する。これはコアBotの他のコマンド(stop, backup apply 等)と全く同じ
+場所・同じ形式。デフォルト値は _KNOWN_PERMISSIONS にまとめてあり(下記)、
+拡張ロード時に .config にまだ無いキーがあれば自動的にこのデフォルト値で
+書き足す(初回コマンド実行時にファイルへ反映される。詳細は
+_register_missing_permission_keys() / _perm() を参照)。つまり管理者は
+.config を開けば "rcon cmd" 等のキーが既に存在した状態になっており、
+値を書き換えるだけでよい(何もしなければデフォルトのまま動く)。
 
     rcon check              0
     rcon config              2
@@ -86,16 +90,48 @@ from typing import Literal
 import discord
 from discord import app_commands
 
-from bot.utils import not_enough_permission, print_user, user_permission
+from bot.utils import not_enough_permission, print_user, rewrite_config, user_permission
 from core.state import ctx
 
 # ロード時のみ ctx にセットされる値なので、モジュール先頭で変数に保持しておく
 tree = ctx.extension_commands_group
 logger = ctx.extension_logger
 
+# rcon の各コマンドが要求する権限レベルのデフォルト値(唯一の定義元)。
+# .config の discord_commands.permission.commands_level に同名キーが無ければ
+# ここに登録し、そのままファイルへも書き戻す(_register_missing_permission_keys 参照)。
+_KNOWN_PERMISSIONS: dict[str, int] = {
+    "rcon check": 0,
+    "rcon config": 2,
+    "rcon cmd": 2,
+    "rcon list": 0,
+    "rcon gamemode": 1,
+    "rcon weather": 1,
+    "rcon time": 1,
+    "rcon difficulty": 1,
+    "rcon say": 1,
+    "rcon tp": 1,
+    "rcon give": 1,
+    "rcon kill": 2,
+    "rcon xp": 1,
+    "rcon summon": 1,
+    "rcon setblock": 1,
+    "rcon title": 1,
+    "rcon effect give": 1,
+    "rcon effect clear": 1,
+    "rcon whitelist add": 1,
+    "rcon whitelist remove": 1,
+    "rcon whitelist list": 0,
+    "rcon player ban": 2,
+    "rcon player pardon": 2,
+    "rcon player kick": 2,
+    "rcon player op": 2,
+    "rcon player deop": 2,
+}
+
 _STATE_FILE = Path(__file__).parent / "state.json"
 _DEFAULT_STATE = {"timeout_seconds": 5.0}
-# 各コマンドの要求権限レベルは state.json ではなく .config 側(下記 _permission_level 参照)で管理する
+# 各コマンドの要求権限レベルは state.json ではなく .config 側(_KNOWN_PERMISSIONS / _perm() 参照)で管理する
 
 
 def _load_state() -> dict:
@@ -205,22 +241,53 @@ def _sanitize_text(text: str) -> str:
     return " ".join(text.splitlines()).strip()
 
 
-def _permission_level(key: str, default: int) -> int:
-    """コマンドごとの要求権限レベルを .config から読む。
+_permission_keys_pending_persist = False
 
-    コアBotの各コマンドが ctx.text.command_permission["terminal set"] のように
-    参照しているのと同じ辞書 (= config["discord_commands"]["permission"]["commands_level"]、
-    main.py で ctx.text.command_permission に代入されている実体は同じdict) を使う。
-    コアBotのキーは config_loader.py が起動時に自動補完するが、拡張機能側のキー
-    ("rcon cmd" 等) は補完対象外で .config に無ければ存在しないため、
-    その場合はここで渡した default を使う。管理者は .config の
-    discord_commands.permission.commands_level に "rcon cmd": 3 のように追記すれば
-    このBotの他のコマンドと全く同じ場所・同じ形式で権限レベルを変更できる。
+
+def _register_missing_permission_keys() -> None:
+    """.config に無い rcon の権限キーを _KNOWN_PERMISSIONS の値で登録する(メモリ上のみ)。
+
+    コアBotは core/config_loader.py が起動時に INITIAL_COMMAND_PERMISSION の
+    未登録キーを .config へ補完しているが、これは対象がコア command_desc に
+    登録されたコマンドに限られ、拡張機能のキーは補完されない。同じ体験(.configを
+    開けばキーが既に存在し、値を書き換えるだけでよい)を拡張機能側でも再現するため、
+    ロード時に不足しているキーを ctx.text.command_permission (= .config の
+    commands_level と同一のdict) へ直接書き込む。実際のファイルへの反映は
+    _check_permission() の初回呼び出し時に行う(モジュールimport時点は非同期
+    コンテキストではなく rewrite_config() を await できないため)。
     """
-    return ctx.text.command_permission.get(key, default)
+    global _permission_keys_pending_persist
+    for key, default in _KNOWN_PERMISSIONS.items():
+        if key not in ctx.text.command_permission:
+            ctx.text.command_permission[key] = default
+            _permission_keys_pending_persist = True
+    if _permission_keys_pending_persist:
+        logger.info("registered missing rcon permission keys into .config (pending persist)")
+
+
+_register_missing_permission_keys()
+
+
+def _perm(key: str) -> int:
+    """コマンドごとの要求権限レベルを .config から読む(未登録キーは有り得ない前提)。
+
+    _register_missing_permission_keys() でロード時に .config 側へ全キーを
+    登録済みのため、通常はここで KeyError は起きない。デフォルト値の定義元は
+    _KNOWN_PERMISSIONS 一箇所のみ(呼び出し側に数値を重複させない)。
+    """
+    return ctx.text.command_permission.get(key, _KNOWN_PERMISSIONS[key])
+
+
+async def _persist_permission_keys_if_needed() -> None:
+    global _permission_keys_pending_persist
+    if _permission_keys_pending_persist:
+        await rewrite_config()
+        _permission_keys_pending_persist = False
+        logger.info("persisted rcon permission keys to .config")
 
 
 async def _check_permission(interaction: discord.Interaction, required: int) -> bool:
+    await _persist_permission_keys_if_needed()
     await print_user(logger, interaction.user)
     if await user_permission(interaction.user) < required:
         await not_enough_permission(interaction, logger)
@@ -269,7 +336,7 @@ async def _run(interaction: discord.Interaction, command: str, *, required: int)
 
 @tree.command(name="check", description="RCONの設定状況と疎通を確認する")
 async def check_command(interaction: discord.Interaction) -> None:
-    if not await _check_permission(interaction, _permission_level("rcon check", 0)):
+    if not await _check_permission(interaction, _perm("rcon check")):
         return
     enabled, port, password = _rcon_connection_info()
 
@@ -301,7 +368,7 @@ async def check_command(interaction: discord.Interaction) -> None:
 @tree.command(name="config", description="RCON接続/応答のタイムアウト秒数を設定する(要上位権限)")
 @app_commands.describe(timeout_seconds="RCON接続/応答のタイムアウト秒数")
 async def config_command(interaction: discord.Interaction, timeout_seconds: float) -> None:
-    if not await _check_permission(interaction, _permission_level("rcon config", 2)):
+    if not await _check_permission(interaction, _perm("rcon config")):
         return
 
     _state["timeout_seconds"] = max(0.5, timeout_seconds)
@@ -317,14 +384,14 @@ async def config_command(interaction: discord.Interaction, timeout_seconds: floa
 
 @tree.command(name="cmd", description="任意のコマンドをRCON経由で実行する(要上位権限)")
 async def cmd_command(interaction: discord.Interaction, command: str) -> None:
-    await _run(interaction, command.strip(), required=_permission_level("rcon cmd", 2))
+    await _run(interaction, command.strip(), required=_perm("rcon cmd"))
 
 
 # ── list ─────────────────────────────────────────────────────────────────────
 
 @tree.command(name="list", description="オンラインプレイヤー一覧を表示する")
 async def list_command(interaction: discord.Interaction) -> None:
-    await _run(interaction, "list", required=_permission_level("rcon list", 0))
+    await _run(interaction, "list", required=_perm("rcon list"))
 
 
 # ── gamemode / weather / time / difficulty / say ────────────────────────────
@@ -335,7 +402,7 @@ async def gamemode_command(
     mode: Literal["survival", "creative", "adventure", "spectator"],
     selector: str = "@a",
 ) -> None:
-    await _run(interaction, f"gamemode {mode} {selector}", required=_permission_level("rcon gamemode", 1))
+    await _run(interaction, f"gamemode {mode} {selector}", required=_perm("rcon gamemode"))
 
 
 @tree.command(name="weather", description="天候を変更する")
@@ -345,7 +412,7 @@ async def weather_command(
     seconds: int | None = None,
 ) -> None:
     command = f"weather {condition}" + (f" {seconds}" if seconds is not None else "")
-    await _run(interaction, command, required=_permission_level("rcon weather", 1))
+    await _run(interaction, command, required=_perm("rcon weather"))
 
 
 @tree.command(name="time", description="時刻を変更する")
@@ -354,7 +421,7 @@ async def time_command(
     action: Literal["set", "add"],
     value: str,
 ) -> None:
-    await _run(interaction, f"time {action} {value}", required=_permission_level("rcon time", 1))
+    await _run(interaction, f"time {action} {value}", required=_perm("rcon time"))
 
 
 @tree.command(name="difficulty", description="難易度を変更する")
@@ -362,7 +429,7 @@ async def difficulty_command(
     interaction: discord.Interaction,
     level: Literal["peaceful", "easy", "normal", "hard"],
 ) -> None:
-    await _run(interaction, f"difficulty {level}", required=_permission_level("rcon difficulty", 1))
+    await _run(interaction, f"difficulty {level}", required=_perm("rcon difficulty"))
 
 
 @tree.command(name="say", description="サーバー内に一斉送信する")
@@ -371,24 +438,24 @@ async def say_command(interaction: discord.Interaction, message: str) -> None:
     if not sanitized:
         await interaction.response.send_message("メッセージが空です", ephemeral=True)
         return
-    await _run(interaction, f"say {sanitized}", required=_permission_level("rcon say", 1))
+    await _run(interaction, f"say {sanitized}", required=_perm("rcon say"))
 
 
 # ── tp / give / kill / xp / summon / setblock / title ───────────────────────
 
 @tree.command(name="tp", description="指定座標へテレポートする")
 async def tp_command(interaction: discord.Interaction, selector: str, x: float, y: float, z: float) -> None:
-    await _run(interaction, f"tp {selector} {x} {y} {z}", required=_permission_level("rcon tp", 1))
+    await _run(interaction, f"tp {selector} {x} {y} {z}", required=_perm("rcon tp"))
 
 
 @tree.command(name="give", description="アイテムを付与する")
 async def give_command(interaction: discord.Interaction, selector: str, item: str, count: int = 1) -> None:
-    await _run(interaction, f"give {selector} {item} {max(1, count)}", required=_permission_level("rcon give", 1))
+    await _run(interaction, f"give {selector} {item} {max(1, count)}", required=_perm("rcon give"))
 
 
 @tree.command(name="kill", description="対象を殺す")
 async def kill_command(interaction: discord.Interaction, selector: str) -> None:
-    await _run(interaction, f"kill {selector}", required=_permission_level("rcon kill", 2))
+    await _run(interaction, f"kill {selector}", required=_perm("rcon kill"))
 
 
 @tree.command(name="xp", description="経験値を付与する")
@@ -398,7 +465,7 @@ async def xp_command(
     amount: int,
     unit: Literal["points", "levels"] = "points",
 ) -> None:
-    await _run(interaction, f"xp add {selector} {amount} {unit}", required=_permission_level("rcon xp", 1))
+    await _run(interaction, f"xp add {selector} {amount} {unit}", required=_perm("rcon xp"))
 
 
 @tree.command(name="summon", description="エンティティを召喚する")
@@ -410,18 +477,18 @@ async def summon_command(
     z: float | None = None,
 ) -> None:
     coords = f" {x} {y} {z}" if x is not None and y is not None and z is not None else ""
-    await _run(interaction, f"summon {entity}{coords}", required=_permission_level("rcon summon", 1))
+    await _run(interaction, f"summon {entity}{coords}", required=_perm("rcon summon"))
 
 
 @tree.command(name="setblock", description="指定座標にブロックを設置する")
 async def setblock_command(interaction: discord.Interaction, x: int, y: int, z: int, block: str) -> None:
-    await _run(interaction, f"setblock {x} {y} {z} {block}", required=_permission_level("rcon setblock", 1))
+    await _run(interaction, f"setblock {x} {y} {z} {block}", required=_perm("rcon setblock"))
 
 
 @tree.command(name="title", description="対象にタイトルを表示する")
 async def title_command(interaction: discord.Interaction, selector: str, text: str) -> None:
     sanitized = _sanitize_text(text)
-    await _run(interaction, f'title {selector} title {{"text":"{sanitized}"}}', required=_permission_level("rcon title", 1))
+    await _run(interaction, f'title {selector} title {{"text":"{sanitized}"}}', required=_perm("rcon title"))
 
 
 # ── effect (サブグループ) ─────────────────────────────────────────────────────
@@ -437,12 +504,12 @@ async def effect_give_command(
     seconds: int = 30,
     amplifier: int = 0,
 ) -> None:
-    await _run(interaction, f"effect give {selector} {effect} {seconds} {amplifier}", required=_permission_level("rcon effect give", 1))
+    await _run(interaction, f"effect give {selector} {effect} {seconds} {amplifier}", required=_perm("rcon effect give"))
 
 
 @effect_group.command(name="clear", description="エフェクトを解除する")
 async def effect_clear_command(interaction: discord.Interaction, selector: str, effect: str | None = None) -> None:
-    await _run(interaction, f"effect clear {selector}" + (f" {effect}" if effect else ""), required=_permission_level("rcon effect clear", 1))
+    await _run(interaction, f"effect clear {selector}" + (f" {effect}" if effect else ""), required=_perm("rcon effect clear"))
 
 
 tree.add_command(effect_group)
@@ -455,17 +522,17 @@ whitelist_group = app_commands.Group(name="whitelist", description="ホワイト
 
 @whitelist_group.command(name="add", description="ホワイトリストに追加する")
 async def whitelist_add_command(interaction: discord.Interaction, player: str) -> None:
-    await _run(interaction, f"whitelist add {player}", required=_permission_level("rcon whitelist add", 1))
+    await _run(interaction, f"whitelist add {player}", required=_perm("rcon whitelist add"))
 
 
 @whitelist_group.command(name="remove", description="ホワイトリストから削除する")
 async def whitelist_remove_command(interaction: discord.Interaction, player: str) -> None:
-    await _run(interaction, f"whitelist remove {player}", required=_permission_level("rcon whitelist remove", 1))
+    await _run(interaction, f"whitelist remove {player}", required=_perm("rcon whitelist remove"))
 
 
 @whitelist_group.command(name="list", description="ホワイトリストを表示する")
 async def whitelist_list_command(interaction: discord.Interaction) -> None:
-    await _run(interaction, "whitelist list", required=_permission_level("rcon whitelist list", 0))
+    await _run(interaction, "whitelist list", required=_perm("rcon whitelist list"))
 
 
 tree.add_command(whitelist_group)
@@ -479,28 +546,28 @@ player_group = app_commands.Group(name="player", description="プレイヤーへ
 @player_group.command(name="ban", description="対象をBANする")
 async def player_ban_command(interaction: discord.Interaction, player: str, reason: str | None = None) -> None:
     command = f"ban {player}" + (f" {_sanitize_text(reason)}" if reason else "")
-    await _run(interaction, command, required=_permission_level("rcon player ban", 2))
+    await _run(interaction, command, required=_perm("rcon player ban"))
 
 
 @player_group.command(name="pardon", description="対象のBANを解除する")
 async def player_pardon_command(interaction: discord.Interaction, player: str) -> None:
-    await _run(interaction, f"pardon {player}", required=_permission_level("rcon player pardon", 2))
+    await _run(interaction, f"pardon {player}", required=_perm("rcon player pardon"))
 
 
 @player_group.command(name="kick", description="対象をキックする")
 async def player_kick_command(interaction: discord.Interaction, player: str, reason: str | None = None) -> None:
     command = f"kick {player}" + (f" {_sanitize_text(reason)}" if reason else "")
-    await _run(interaction, command, required=_permission_level("rcon player kick", 2))
+    await _run(interaction, command, required=_perm("rcon player kick"))
 
 
 @player_group.command(name="op", description="対象をOPにする")
 async def player_op_command(interaction: discord.Interaction, player: str) -> None:
-    await _run(interaction, f"op {player}", required=_permission_level("rcon player op", 2))
+    await _run(interaction, f"op {player}", required=_perm("rcon player op"))
 
 
 @player_group.command(name="deop", description="対象のOPを解除する")
 async def player_deop_command(interaction: discord.Interaction, player: str) -> None:
-    await _run(interaction, f"deop {player}", required=_permission_level("rcon player deop", 2))
+    await _run(interaction, f"deop {player}", required=_perm("rcon player deop"))
 
 
 tree.add_command(player_group)

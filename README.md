@@ -182,3 +182,12 @@ config["discord_commands"]["permission"]["commands_level"]`)。
 
 `rcon cmd` は `allow_cmd` のような許可リストを一切通さない無条件の生コマンド実行なので、
 コアBotの `/cmd serverin`(既定 level 1)より一段高いデフォルト level 2 にしています。
+
+**キーは自動的に追加されます。** `.config` に `"rcon cmd"` のようなキーがまだ存在しない場合、
+拡張ロード時にデフォルト値でメモリ上へ登録し、最初にrconのいずれかのコマンドが実行された
+タイミングで `.config` ファイルへ書き戻します(コアBotが `core/config_loader.py` の
+起動時処理で自身のコマンドの権限キーを補完しているのと同じ考え方です)。既に手動で
+値を設定してあるキーは上書きされません。つまり、何もしなくても `.config` を開けば
+`"rcon cmd": 2` のように全キーが既に並んだ状態になっており、変更したい値だけ書き換えれば
+済みます。また `ctx.text.command_permission` はコアBotの `/permission view <user>
+detail:true` が一覧表示する辞書そのものなので、rconのキーもそこに一緒に表示されます。

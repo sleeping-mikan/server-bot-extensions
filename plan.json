@@ -136,10 +136,10 @@
         "/extension-rcon effect give|clear",
         "/extension-rcon whitelist add|remove|list",
         "/extension-rcon player ban|pardon|kick|op|deop (要上位権限)",
-        "/extension-rcon execute run|as|at|if-entity|custom — execute コマンドのラッパー。runは任意チェインをそのまま実行、customはas/at/positioned/rotated/facing/anchored/align/in/if_entity/unless_entity/if_block/if_scoreを個別の型付き引数として指定し固定順で自動組み立て"
+        "/extension-rcon execute run|as|at|if-entity|custom|builder — execute コマンドのラッパー。runは任意チェインをそのまま実行、customはas/at/positioned/rotated/facing/anchored/align/in/if_entity/unless_entity/if_block/if_scoreを個別の型付き引数として指定し固定順で自動組み立て(各修飾子1回まで)、builderはボタン/セレクト/モーダルで対話的に組み立て繰り返し・再帰入れ子にも対応(理論上完全)"
       ],
       "apis_used": ["extension_commands_group", "ctx.server_path (server.propertiesの読み取り)", "asyncio/struct によるRCONクライアント自前実装(追加pip不要)"],
-      "notes": "review_pass_2026-07-24: RCON接続情報(enable-rcon/rcon.port/rcon.password)は server.properties から読み取り、Discordにパスワードを入力させない設計にした。Bot=RCON接続元は同一マシン前提でhostは127.0.0.1固定。フェイクRCONサーバーを立てて認証成功/失敗・空応答・エラーメッセージ応答の4パターンをテスト済み。これによりtps-lag-reportがblockedだった根本原因(標準出力を読む手段が無い)は rcon cmd 経由で実質解消された(下記tps-lag-reportのnotes参照)。execute run は任意チェインをRCONへそのまま渡すため機能的には100%再現しているが、chain全体を1個のスラッシュコマンドの型付き引数だけで表現しきることは(as/at/if/unless等が任意回連結できる可変長構造なのに対しDiscordの引数は固定スキーマなため)理論上不可能。ユーザーからの指摘を受け、主要修飾子を個別引数化して固定順で組み立てる execute custom を追加し、runへのフォールバックと2段構えにした。組み立てロジックはスタンドアロンのユニットテストで検証済み。"
+      "notes": "review_pass_2026-07-24: RCON接続情報(enable-rcon/rcon.port/rcon.password)は server.properties から読み取り、Discordにパスワードを入力させない設計にした。Bot=RCON接続元は同一マシン前提でhostは127.0.0.1固定。フェイクRCONサーバーを立てて認証成功/失敗・空応答・エラーメッセージ応答の4パターンをテスト済み。これによりtps-lag-reportがblockedだった根本原因(標準出力を読む手段が無い)は rcon cmd 経由で実質解消された(下記tps-lag-reportのnotes参照)。\n\nexecute run は任意チェインをRCONへそのまま渡すため機能的には100%再現しているが、chain全体を1個のスラッシュコマンドの型付き引数だけで表現しきることは理論上不可能。理由は単なる引数不足ではなく、runの実行対象コマンドにexecute自身を指定できるため chain が無限に再帰しうる(例: `execute as X at Y as Z run execute at W run execute ... run <command>`、ユーザー指摘により判明)ため、有限フィールドの『1回のスラッシュコマンド呼び出し』では原理的に表現できない再帰構造だから。まず主要修飾子を個別引数化・固定順で組み立てる execute custom を追加(各修飾子1回まで、繰り返し/入れ子は非対応と明記)。さらに『1回の呼び出し』という制約自体を外すため、ボタン/セレクト/モーダルで1修飾子ずつ何度でも追加でき、run対象として子ビルダー(execute入れ子)を再帰的に開始できる execute builder を追加し、繰り返し・再帰入れ子を含め理論上完全にカバーできるようにした。builderの構築・入れ子連結ロジックは実際のdiscord.py 2.3.2をロードしたユニットテストで検証済み(nested実行結果が `execute as @a run execute at @s run say nested` と正しく組み上がることまで確認)。"
     },
     {
       "id": "custom-whitelist-request",

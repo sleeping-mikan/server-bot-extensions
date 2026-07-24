@@ -49,7 +49,9 @@ RCON (Source RCON プロトコル、Minecraft Java サーバーが標準対応) 
 - effect give/clear              エフェクト付与/解除
 - whitelist add/remove/list      ホワイトリスト操作
 - player ban/pardon/kick/op/deop 対象への管理操作 (要上位権限)
-- execute run/as/at/if-entity    execute コマンドのラッパー
+- execute run/as/at/if-entity    execute コマンドのラッパー(非再帰・非反復のみ)
+- execute custom                 execute の主要修飾子を型付き引数で組み立て(各修飾子1回まで)
+- execute builder                execute チェインを対話的に組み立てる(繰り返し・入れ子も可、理論上完全)
 """
 
 from __future__ import annotations
@@ -455,13 +457,16 @@ tree.add_command(player_group)
 # execute の機能そのものは run (任意のチェインをそのまま文字列で渡す) の時点で
 # 100%再現できている(RCONにそのまま渡すだけなので、コンソールで打てることは全部打てる)。
 # 再現できていないのはそこではなく、「chain全体を1個のDiscordスラッシュコマンドの
-# 個別の型付き引数として表現する」方の完全さ: as/at/positioned/rotated/facing/
-# anchored/align/in/if/unless は任意個・任意順に繰り返し連結できるため、
-# 固定スキーマのスラッシュコマンド(最大25引数、可変長の繰り返し構造は不可)では
-# 理論上どうやっても全パターンを型付き引数だけで表現しきれない。
-# そこで custom で「1回ずつなら」というよく使う範囲を型付き引数として構造化し、
-# それを超える(条件を複数回重ねる等の)ケースは run にフォールバックする、という
-# 2段構えにしている。
+# 個別の型付き引数として表現する」方の完全さ。
+#
+# これは単に「引数を増やせば足りる」話ではない。execute の run が実行するコマンドには
+# execute 自身も指定できるため、chain は理論上無限に再帰しうる:
+#   execute as X at Y as Z run execute at W run execute ... run <command>
+# (同じ修飾子の繰り返しも、execute-in-run の入れ子も、どちらも深さに上限が無い)
+# 有限個のフィールドしか持てないDiscordスラッシュコマンドでは、この再帰構造を
+# 原理的に表現しきれない。そこで custom では「各修飾子1回ずつ・固定順」という
+# よく使う範囲だけを型付き引数として構造化し、繰り返しや入れ子が必要なケースは
+# 素の文字列をそのまま通す run にフォールバックする、という2段構えにしている。
 
 execute_group = app_commands.Group(name="execute", description="execute コマンドのラッパー")
 
@@ -575,6 +580,200 @@ async def execute_custom_command(
         if_entity, unless_entity, if_block, if_score,
     )
     await _run(interaction, chain)
+
+
+# ── execute builder (対話的UIによる完全な再現) ────────────────────────────────
+#
+# run/custom は「1回のスラッシュコマンド呼び出し」という固定スキーマの中に収めようと
+# するために不完全になっていた。ここではその制約を外し、Discordのボタン/セレクト/モーダルで
+# 1修飾子ずつ何度でも追加できる対話フローにする。「何回でも繰り返し追加できる」ことと
+# 「run の対象として、コマンドの代わりに新しいexecuteチェインを入れ子で開始できる」ことの
+# 2つによって、繰り返しも再帰的な入れ子も表現できる — つまり execute が実際に表現しうる
+# チェインを理論上すべてカバーする。
+
+# (keyword, 説明, モーダルでの入力欄ラベル)
+_BUILDER_MODIFIERS: list[tuple[str, str, str]] = [
+    ("as", "実行者を変更する (execute as)", "セレクター"),
+    ("at", "位置/向き/次元の基準にする (execute at)", "セレクター"),
+    ("positioned", "座標を指定する (execute positioned)", "x y z"),
+    ("positioned as", "セレクターの位置を基準にする (execute positioned as)", "セレクター"),
+    ("rotated", "向きを指定する (execute rotated)", "yaw pitch"),
+    ("rotated as", "セレクターの向きを基準にする (execute rotated as)", "セレクター"),
+    ("facing", "向く座標を指定する (execute facing)", "x y z"),
+    ("facing entity", "対象を向く (execute facing entity)", "セレクター eyes|feet"),
+    ("anchored", "アンカーを設定する (execute anchored)", "eyes または feet"),
+    ("align", "座標を整列させる (execute align)", "軸 例: xyz"),
+    ("in", "次元を変更する (execute in)", "ディメンションID"),
+    ("if entity", "エンティティが存在すれば続行 (execute if entity)", "セレクター"),
+    ("unless entity", "エンティティが存在しなければ続行 (execute unless entity)", "セレクター"),
+    ("if block", "指定座標が該当ブロックなら続行 (execute if block)", "x y z block"),
+    ("unless block", "指定座標が該当ブロックでなければ続行 (execute unless block)", "x y z block"),
+    ("if score", "スコア条件を満たせば続行 (execute if score)", "'score 'の後に続く部分"),
+    ("unless score", "スコア条件を満たさなければ続行 (execute unless score)", "'score 'の後に続く部分"),
+    ("if predicate", "predicateを満たせば続行 (execute if predicate)", "predicate ID"),
+    ("unless predicate", "predicateを満たさなければ続行 (execute unless predicate)", "predicate ID"),
+    ("if biome", "指定座標が該当biomeなら続行 (execute if biome)", "x y z biome"),
+    ("if dimension", "指定ディメンションなら続行 (execute if dimension)", "ディメンションID"),
+    ("if loaded", "指定座標がロード済みなら続行 (execute if loaded)", "x y z"),
+    ("raw", "その他: 'execute 'の後に続くキーワードと引数をそのまま入力", "キーワードと引数"),
+]
+_BUILDER_PROMPTS = {kw: prompt for kw, _desc, prompt in _BUILDER_MODIFIERS}
+
+
+class _ModifierArgModal(discord.ui.Modal):
+    """修飾子1個ぶんの引数を入力させるモーダル。"""
+
+    def __init__(self, view: "ExecuteBuilderView", keyword: str) -> None:
+        super().__init__(title=f"execute {keyword} ..."[:45])
+        self.builder_view = view
+        self.keyword = keyword
+        self.arg_input = discord.ui.TextInput(label=_BUILDER_PROMPTS[keyword][:45], max_length=200)
+        self.add_item(self.arg_input)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        value = _sanitize_text(str(self.arg_input.value))
+        segment = value if self.keyword == "raw" else f"{self.keyword} {value}"
+        self.builder_view.segments.append(segment)
+        await interaction.response.edit_message(embed=self.builder_view._embed(), view=self.builder_view)
+
+
+class _FinalCommandModal(discord.ui.Modal, title="実行するコマンド"):
+    """チェインの最後 (run の対象) となるコマンドを入力させるモーダル。"""
+
+    command_input: discord.ui.TextInput = discord.ui.TextInput(
+        label="コマンド (execute以外、例: say hi / give @s diamond)",
+        max_length=400,
+    )
+
+    def __init__(self, view: "ExecuteBuilderView") -> None:
+        super().__init__()
+        self.builder_view = view
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await self.builder_view._complete(interaction, str(self.command_input.value).strip())
+
+
+class ExecuteBuilderView(discord.ui.View):
+    """1修飾子ずつ追加していく execute チェインビルダー。
+
+    on_complete(interaction, full_command) は、最終的に組み立て終わった
+    "execute ..." というコマンド文字列を渡して呼ばれる。ネスト(入れ子)の場合は
+    子ビルダーの on_complete が親の _complete を呼ぶことで、子の完成結果を
+    親の run 対象コマンドとして連結する。
+    """
+
+    def __init__(self, author_id: int, on_complete) -> None:
+        super().__init__(timeout=300)
+        self.author_id = author_id
+        self.segments: list[str] = []
+        self.on_complete = on_complete
+
+        select = discord.ui.Select(
+            placeholder="修飾子を追加する...",
+            options=[
+                discord.SelectOption(label=kw, description=desc[:100], value=kw)
+                for kw, desc, _prompt in _BUILDER_MODIFIERS
+            ],
+        )
+        select.callback = self._on_select_modifier
+        self.add_item(select)
+
+    def _embed(self) -> discord.Embed:
+        chain = " ".join(self.segments)
+        preview = f"execute {chain} run ..." if chain else "execute run ..."
+        embed = discord.Embed(title="execute ビルダー", description=f"```{preview}```", color=discord.Color.blurple())
+        embed.set_footer(text="修飾子を追加 / Undo / 入れ子 / コマンドで確定 のいずれかを選んでください")
+        return embed
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("このビルダーは開始した本人のみ操作できます", ephemeral=True)
+            return False
+        return True
+
+    async def _on_select_modifier(self, interaction: discord.Interaction) -> None:
+        keyword = interaction.data["values"][0]
+        await interaction.response.send_modal(_ModifierArgModal(self, keyword))
+
+    @discord.ui.button(label="Undo (直前の修飾子を削除)", style=discord.ButtonStyle.secondary, row=1)
+    async def undo_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if self.segments:
+            self.segments.pop()
+        await interaction.response.edit_message(embed=self._embed(), view=self)
+
+    @discord.ui.button(label="ここに execute を入れ子にする", style=discord.ButtonStyle.primary, row=1)
+    async def nest_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        child = ExecuteBuilderView(self.author_id, self._on_child_complete)
+        await interaction.response.edit_message(embed=child._embed(), view=child)
+
+    @discord.ui.button(label="コマンドで確定して実行", style=discord.ButtonStyle.success, row=2)
+    async def finish_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await interaction.response.send_modal(_FinalCommandModal(self))
+
+    @discord.ui.button(label="キャンセル", style=discord.ButtonStyle.danger, row=2)
+    async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await interaction.response.edit_message(content="キャンセルしました", embed=None, view=None)
+
+    async def _on_child_complete(self, interaction: discord.Interaction, nested_full_command: str) -> None:
+        # 子ビルダーが完成させた "execute ..." 文字列を、自分の run 対象コマンドとして連結する
+        await self._complete(interaction, nested_full_command)
+
+    async def _complete(self, interaction: discord.Interaction, final_command: str) -> None:
+        if not final_command:
+            await interaction.response.send_message("コマンドが空です", ephemeral=True)
+            return
+        chain = " ".join(self.segments)
+        full_command = f"execute {chain} run {final_command}" if chain else f"execute run {final_command}"
+        await self.on_complete(interaction, full_command)
+
+
+async def _finalize_builder_and_run(interaction: discord.Interaction, full_command: str) -> None:
+    """ビルダーが完成させたコマンドをRCONで実行する(モーダル送信インタラクションから呼ばれる)。"""
+    await print_user(logger, interaction.user)
+    if await user_permission(interaction.user) < REQUIRED_LEVEL:
+        await interaction.response.edit_message(content="権限が不足しています", embed=None, view=None)
+        return
+
+    enabled, port, password = _rcon_connection_info()
+    if not enabled or not password:
+        await interaction.response.edit_message(
+            content="RCONが有効になっていません。`/extension-rcon check` で設定状況を確認してください。",
+            embed=None,
+            view=None,
+        )
+        return
+
+    await interaction.response.edit_message(content=f"実行中: `{full_command}`", embed=None, view=None)
+    try:
+        result = await rcon_execute("127.0.0.1", port, password, full_command, timeout=_state["timeout_seconds"])
+    except RconAuthError:
+        logger.error("rcon auth failed (builder)")
+        await interaction.followup.send("RCON認証に失敗しました (rcon.password を確認してください)")
+        return
+    except asyncio.TimeoutError:
+        logger.error(f"rcon timeout (builder) -> {full_command!r}")
+        await interaction.followup.send("RCON接続がタイムアウトしました")
+        return
+    except OSError as e:
+        logger.error(f"rcon connection failed (builder) ({e}) -> {full_command!r}")
+        await interaction.followup.send(f"RCONへの接続に失敗しました ({e})")
+        return
+
+    logger.info(f"rcon(builder) -> {full_command!r} -> {result!r}")
+    embed = discord.Embed(title=f"/{full_command}", color=discord.Color.green())
+    embed.add_field(name="結果", value=f"```{(result or '(応答なし)')[:1000]}```", inline=False)
+    await interaction.followup.send(embed=embed)
+
+
+@execute_group.command(
+    name="builder",
+    description="execute チェインを対話的に組み立てて実行する(繰り返し・入れ子にも対応)",
+)
+async def execute_builder_command(interaction: discord.Interaction) -> None:
+    if not await _check_permission(interaction, REQUIRED_LEVEL):
+        return
+    view = ExecuteBuilderView(interaction.user.id, _finalize_builder_and_run)
+    await interaction.response.send_message(embed=view._embed(), view=view, ephemeral=True)
 
 
 tree.add_command(execute_group)

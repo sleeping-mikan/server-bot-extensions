@@ -23,6 +23,23 @@ mikanassets/
 server-bot-v3 を配置しているディレクトリの `mikanassets/extension/` にそのままコピーしてください。
 (各拡張機能は初回のコマンド実行時に、自分のフォルダ内へ `state.json` を自動生成して設定を保存します)
 
+## コーディング規約
+
+- **embedは `bot.embeds.ModifiedEmbeds` を使う**。生の `discord.Embed(...)` は直接使わない。
+  `ModifiedEmbeds.DefaultEmbed(title, description=None)` / `ModifiedEmbeds.ErrorEmbed(title, description=None)`
+  はどちらも `discord.Embed` のサブクラスで、共通の下線画像・サムネイルを自動設定する。
+  コアBotの全コマンド(terminal.py, cmd.py, status.py 等)がこれを使っており、拡張機能だけ
+  見た目が異なると統一感が崩れるため、成功系は `DefaultEmbed`、エラー・失敗系は `ErrorEmbed` を使う。
+  プレーンテキストの `send_message("...")` も同様に embed 化する(コアBotの
+  `not_enough_permission()` を含め、ユーザー向け応答は常に embed が基本)。
+- **コマンドの `description` に権限要件を書かない**。「(要上位権限)」のような記述は、
+  権限レベルが `.config` の `discord_commands.permission.commands_level` で変更可能な
+  設定値である以上、常に正しいとは限らない(管理者が変更すれば古い記述になる)。
+  `description` に必要なのは「このコマンドが何をするか」という使い方であって、
+  「誰が使えるか」という利用条件ではない。権限要件を書きたい場合は、コマンド一覧とは別に
+  独立したセクション(このREADMEの各拡張の説明や、`rcon` のようにモジュール docstring 内の
+  専用セクション)にまとめる。
+
 ## 採否の経緯
 
 最初に `quick-commands`(weather/time/gamemode等の選択式スラッシュコマンド化)を実装しましたが、

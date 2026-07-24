@@ -24,6 +24,7 @@ from discord import app_commands
 from discord.ext import tasks
 
 from bot.client import client
+from bot.embeds import ModifiedEmbeds
 from bot.extensions import append_task, write_server_in
 from bot.utils import not_enough_permission, print_user, user_permission
 from core.state import ctx
@@ -142,15 +143,18 @@ async def add_command(interaction: discord.Interaction, message: str, date: str 
         return
     sanitized = _sanitize(message)
     if not sanitized:
-        await interaction.response.send_message("メッセージが空です", ephemeral=True)
+        embed = ModifiedEmbeds.ErrorEmbed(title="メッセージが空です")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
         return
     if date is not None and not _DATE_PATTERN.match(date):
-        await interaction.response.send_message("date は MM-DD 形式で指定してください (例: 12-25)", ephemeral=True)
+        embed = ModifiedEmbeds.ErrorEmbed(title="date の形式が不正です", description="MM-DD形式で指定してください(例: 12-25)")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
         return
     _state["messages"].append({"text": sanitized, "date": date})
     _save_state()
     suffix = f" ({date}限定)" if date else ""
-    await interaction.response.send_message(f"追加しました ({len(_state['messages'])}件目){suffix}: {sanitized}")
+    embed = ModifiedEmbeds.DefaultEmbed(title="メッセージを追加しました", description=f"({len(_state['messages'])}件目){suffix}: {sanitized}")
+    await interaction.response.send_message(embed=embed)
 
 
 @tree.command(name="remove", description="登録済みメッセージを削除する")
@@ -158,16 +162,18 @@ async def remove_command(interaction: discord.Interaction, index: int) -> None:
     if not await _check_permission(interaction):
         return
     if not (1 <= index <= len(_state["messages"])):
-        await interaction.response.send_message("その番号のメッセージはありません", ephemeral=True)
+        embed = ModifiedEmbeds.ErrorEmbed(title="その番号のメッセージはありません")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
         return
     removed = _state["messages"].pop(index - 1)
     _save_state()
-    await interaction.response.send_message(f"削除しました: {removed['text']}")
+    embed = ModifiedEmbeds.DefaultEmbed(title="メッセージを削除しました", description=removed["text"])
+    await interaction.response.send_message(embed=embed)
 
 
 @tree.command(name="list", description="設定と登録済みメッセージを表示する")
 async def list_command(interaction: discord.Interaction) -> None:
-    embed = discord.Embed(title="auto-announce 設定", color=discord.Color.blurple())
+    embed = ModifiedEmbeds.DefaultEmbed(title="auto-announce 設定")
     embed.add_field(name="間隔", value=f"{_state['interval_minutes']}分", inline=True)
     embed.add_field(name="サーバー内送信", value=str(_state["to_server"]), inline=True)
     embed.add_field(name="Discord送信", value=str(_state["to_discord"]), inline=True)

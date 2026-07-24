@@ -14,7 +14,12 @@
       "bot.extensions.write_server_in(command: str) -> (bool, str) サーバーstdinへ1行書き込み (allow_cmd等の許可リストは通らない、無条件書き込み)",
       "bot.utils.print_user / user_permission / not_enough_permission (bot本体と共通の権限system)",
       "ctx.server_path / ctx.server_name / ctx.backup_path / ctx.paths.base 等の読み取り専用パス情報",
-      "bot.client.client (discord.Client) を直接importすればチャンネル取得/送信も可能"
+      "bot.client.client (discord.Client) を直接importすればチャンネル取得/送信も可能",
+      "bot.embeds.ModifiedEmbeds.DefaultEmbed / ErrorEmbed (discord.Embedのサブクラス、共通の下線画像・サムネイル付き。コアBotの全コマンドがこれを使うため、拡張機能も生のdiscord.Embedではなくこちらを使う)"
+    ],
+    "coding_conventions": [
+      "embedは常に bot.embeds.ModifiedEmbeds.DefaultEmbed / ErrorEmbed を使う。生の discord.Embed(...) やプレーンテキストの send_message は使わない(2026-07-24: 全7拡張を一括で置換済み)。",
+      "コマンドの description に権限要件(『要上位権限』等)を書かない。権限レベルは .config の discord_commands.permission.commands_level で変更可能な設定値であり、description に固定的に書くと実態と食い違いうる。description は『何をするか』の説明に留め、権限要件は別セクション(モジュールdocstringの専用節やREADME)にまとめる(2026-07-24: rconから該当箇所を削除)。"
     ],
     "known_limitations": [
       "サーバーの標準出力を拡張側で直接フックする仕組みは無い(公式ドキュメントで「フック機能は計画中」と明記)。そのためコマンド実行結果を読み取って加工する系の拡張は現状実装不可 — ただし rcon 拡張(下記)はRCONという別プロトコルを使うことでこの制約自体を回避している。",

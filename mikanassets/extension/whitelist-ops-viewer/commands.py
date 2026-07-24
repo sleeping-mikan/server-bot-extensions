@@ -15,6 +15,7 @@ from typing import Callable
 
 import discord
 
+from bot.embeds import ModifiedEmbeds
 from bot.utils import print_user
 from core.state import ctx
 
@@ -39,13 +40,12 @@ def _read_json_list(filename: str) -> list[dict] | None:
 async def _reply_list(interaction: discord.Interaction, filename: str, title: str, line: Callable[[dict], str]) -> None:
     await print_user(logger, interaction.user)
     entries = _read_json_list(filename)
-    embed = discord.Embed(title=title, color=discord.Color.gold())
     if entries is None:
-        embed.description = f"{filename} が見つからないか読み込めませんでした"
+        embed = ModifiedEmbeds.ErrorEmbed(title=title, description=f"{filename} が見つからないか読み込めませんでした")
     elif not entries:
-        embed.description = "(0件)"
+        embed = ModifiedEmbeds.DefaultEmbed(title=title, description="(0件)")
     else:
-        embed.description = "\n".join(line(e) for e in entries)[:4000]
+        embed = ModifiedEmbeds.DefaultEmbed(title=title, description="\n".join(line(e) for e in entries)[:4000])
         embed.set_footer(text=f"{len(entries)}件")
     await interaction.response.send_message(embed=embed)
 

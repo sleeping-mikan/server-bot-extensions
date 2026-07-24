@@ -19,6 +19,7 @@ import discord
 from discord.ext import tasks
 
 from bot.client import client
+from bot.embeds import ModifiedEmbeds
 from bot.extensions import append_task
 from bot.utils import not_enough_permission, print_user, user_permission
 from core.state import ctx
@@ -153,12 +154,12 @@ async def _check_permission(interaction: discord.Interaction, required: int) -> 
 async def last_command(interaction: discord.Interaction) -> None:
     await print_user(logger, interaction.user)
     backups = _iter_backups()
-    embed = discord.Embed(title="バックアップ状況", color=discord.Color.blue())
     if not backups:
-        embed.description = "バックアップが見つかりません"
+        embed = ModifiedEmbeds.ErrorEmbed(title="バックアップ状況", description="バックアップが見つかりません")
     else:
         latest_ts, latest_entry = backups[-1]
         elapsed = datetime.now() - latest_ts
+        embed = ModifiedEmbeds.DefaultEmbed(title="バックアップ状況")
         embed.add_field(name="最終バックアップ", value=latest_entry.name, inline=False)
         embed.add_field(name="経過時間", value=f"約{int(elapsed.total_seconds() // 3600)}時間", inline=True)
         embed.add_field(name="保存数", value=f"{len(backups)}件", inline=True)
@@ -172,9 +173,10 @@ async def prune_now_command(interaction: discord.Interaction) -> None:
     await interaction.response.defer()
     removed = _prune(_state["retention_days"])
     if removed:
-        await interaction.followup.send(f"{len(removed)}件削除しました: " + ", ".join(removed))
+        embed = ModifiedEmbeds.DefaultEmbed(title=f"{len(removed)}件削除しました", description=", ".join(removed))
     else:
-        await interaction.followup.send("削除対象のバックアップはありませんでした")
+        embed = ModifiedEmbeds.DefaultEmbed(title="削除対象のバックアップはありませんでした")
+    await interaction.followup.send(embed=embed)
 
 
 @tree.command(name="config", description="リマインド閾値・保持日数・自動削除・通知先チャンネルを設定する")

@@ -23,6 +23,7 @@ import discord
 from discord.ext import tasks
 
 from bot.client import client
+from bot.embeds import ModifiedEmbeds
 from bot.extensions import append_task
 from bot.utils import not_enough_permission, print_user, user_permission
 from core.state import ctx
@@ -129,7 +130,7 @@ async def config_command(
         _state["discord_channel_id"] = channel.id
     _save_state()
 
-    embed = discord.Embed(title="downtime-notifier 設定", color=discord.Color.blurple())
+    embed = ModifiedEmbeds.DefaultEmbed(title="downtime-notifier 設定")
     embed.add_field(name="猶予時間", value=f"{_state['grace_seconds']}秒", inline=True)
     embed.add_field(name="通知先チャンネルID", value=str(_state["discord_channel_id"]), inline=True)
     await interaction.response.send_message(embed=embed)

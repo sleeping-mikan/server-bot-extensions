@@ -54,8 +54,8 @@ _register_missing_permission_keys() / _perm() を参照)。つまり管理者は
 ## コマンド一覧 (全て /extension-rcon <name> で呼び出す)
 
 - check                          RCON設定状況とサーバーへの疎通を確認する
-- config                         RCON接続/応答のタイムアウト秒数を設定する (要上位権限)
-- cmd <command>                  任意のコマンドをそのまま送信する (要上位権限)
+- config                         RCON接続/応答のタイムアウト秒数を設定する
+- cmd <command>                  任意のコマンドをそのまま送信する
 - list                           オンラインプレイヤー一覧 (/list)
 - gamemode <mode> [selector]     ゲームモード変更 (selector省略時は @a)
 - weather <condition> [seconds]  天候変更
@@ -71,7 +71,10 @@ _register_missing_permission_keys() / _perm() を参照)。つまり管理者は
 - title <selector> <text>        タイトル表示
 - effect give/clear              エフェクト付与/解除
 - whitelist add/remove/list      ホワイトリスト操作
-- player ban/pardon/kick/op/deop 対象への管理操作 (要上位権限)
+- player ban/pardon/kick/op/deop 対象への管理操作
+
+各コマンドの要求権限レベルは上記「## 権限レベル」を参照(.config側で変更可能なため、
+ここでは固定的な権限要件を記載しない)。
 
 execute チェイン(as/at/if等)専用のエイリアスは用意していない。cmd がRCONへの
 生コマンド送信そのものなので、`cmd command:"execute as @a at @s run say hi"` の
@@ -90,6 +93,7 @@ from typing import Literal
 import discord
 from discord import app_commands
 
+from bot.embeds import ModifiedEmbeds
 from bot.utils import not_enough_permission, print_user, rewrite_config, user_permission
 from core.state import ctx
 
@@ -298,12 +302,13 @@ async def _run(interaction: discord.Interaction, command: str, *, required: int)
 
     enabled, port, password = _rcon_connection_info()
     if not enabled or not password:
-        await interaction.response.send_message(
-            "RCONが有効になっていません。server.properties の `enable-rcon=true` と "
-            "`rcon.password` を設定し、サーバーを再起動してから再度お試しください。"
+        embed = ModifiedEmbeds.ErrorEmbed(
+            title="RCONが有効になっていません",
+            description="server.properties の `enable-rcon=true` と `rcon.password` を設定し、"
+            "サーバーを再起動してから再度お試しください。"
             "(`/extension-rcon check` で現在の設定状況を確認できます)",
-            ephemeral=True,
         )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
         return
 
     await interaction.response.defer()
@@ -311,19 +316,22 @@ async def _run(interaction: discord.Interaction, command: str, *, required: int)
         result = await rcon_execute("127.0.0.1", port, password, command, timeout=_state["timeout_seconds"])
     except RconAuthError:
         logger.error("rcon auth failed")
-        await interaction.followup.send("RCON認証に失敗しました (rcon.password を確認してください)")
+        embed = ModifiedEmbeds.ErrorEmbed(title="RCON認証に失敗しました", description="rcon.password を確認してください")
+        await interaction.followup.send(embed=embed)
         return
     except asyncio.TimeoutError:
         logger.error(f"rcon timeout -> {command!r}")
-        await interaction.followup.send("RCON接続がタイムアウトしました。サーバーが起動しているか確認してください。")
+        embed = ModifiedEmbeds.ErrorEmbed(title="RCON接続がタイムアウトしました", description="サーバーが起動しているか確認してください")
+        await interaction.followup.send(embed=embed)
         return
     except OSError as e:
         logger.error(f"rcon connection failed ({e}) -> {command!r}")
-        await interaction.followup.send(f"RCONへの接続に失敗しました ({e})")
+        embed = ModifiedEmbeds.ErrorEmbed(title="RCONへの接続に失敗しました", description=str(e))
+        await interaction.followup.send(embed=embed)
         return
 
     logger.info(f"rcon -> {command!r} -> {result!r}")
-    embed = discord.Embed(title=f"/{command}", color=discord.Color.green())
+    embed = ModifiedEmbeds.DefaultEmbed(title=f"/{command}")
     embed.add_field(name="結果", value=f"```{(result or '(応答なし)')[:1000]}```", inline=False)
     await interaction.followup.send(embed=embed)
 
@@ -336,12 +344,11 @@ async def check_command(interaction: discord.Interaction) -> None:
         return
     enabled, port, password = _rcon_connection_info()
 
-    embed = discord.Embed(title="RCON設定状況", color=discord.Color.blurple())
-    embed.add_field(name="enable-rcon", value=str(enabled), inline=True)
-    embed.add_field(name="rcon.port", value=str(port), inline=True)
-    embed.add_field(name="rcon.password", value="設定済み" if password else "未設定", inline=True)
-
     if not enabled or not password:
+        embed = ModifiedEmbeds.ErrorEmbed(title="RCON設定状況")
+        embed.add_field(name="enable-rcon", value=str(enabled), inline=True)
+        embed.add_field(name="rcon.port", value=str(port), inline=True)
+        embed.add_field(name="rcon.password", value="設定済み" if password else "未設定", inline=True)
         embed.add_field(
             name="疎通確認",
             value="server.properties の enable-rcon / rcon.password を設定しサーバーを再起動してください",
@@ -349,6 +356,11 @@ async def check_command(interaction: discord.Interaction) -> None:
         )
         await interaction.response.send_message(embed=embed)
         return
+
+    embed = ModifiedEmbeds.DefaultEmbed(title="RCON設定状況")
+    embed.add_field(name="enable-rcon", value=str(enabled), inline=True)
+    embed.add_field(name="rcon.port", value=str(port), inline=True)
+    embed.add_field(name="rcon.password", value="設定済み" if password else "未設定", inline=True)
 
     await interaction.response.defer()
     try:
@@ -361,7 +373,7 @@ async def check_command(interaction: discord.Interaction) -> None:
     await interaction.followup.send(embed=embed)
 
 
-@tree.command(name="config", description="RCON接続/応答のタイムアウト秒数を設定する(要上位権限)")
+@tree.command(name="config", description="RCON接続/応答のタイムアウト秒数を設定する")
 @app_commands.describe(timeout_seconds="RCON接続/応答のタイムアウト秒数")
 async def config_command(interaction: discord.Interaction, timeout_seconds: float) -> None:
     if not await _check_permission(interaction, _perm("rcon config")):
@@ -370,7 +382,7 @@ async def config_command(interaction: discord.Interaction, timeout_seconds: floa
     _state["timeout_seconds"] = max(0.5, timeout_seconds)
     _save_state()
 
-    embed = discord.Embed(title="rcon 設定", color=discord.Color.blurple())
+    embed = ModifiedEmbeds.DefaultEmbed(title="rcon 設定")
     embed.add_field(name="timeout_seconds", value=str(_state["timeout_seconds"]), inline=True)
     embed.set_footer(text="権限レベルは .config の discord_commands.permission.commands_level で設定してください")
     await interaction.response.send_message(embed=embed)
@@ -378,7 +390,7 @@ async def config_command(interaction: discord.Interaction, timeout_seconds: floa
 
 # ── cmd (raw) ────────────────────────────────────────────────────────────────
 
-@tree.command(name="cmd", description="任意のコマンドをRCON経由で実行する(要上位権限)")
+@tree.command(name="cmd", description="任意のコマンドをRCON経由で実行する")
 async def cmd_command(interaction: discord.Interaction, command: str) -> None:
     await _run(interaction, command.strip(), required=_perm("rcon cmd"))
 
@@ -432,7 +444,8 @@ async def difficulty_command(
 async def say_command(interaction: discord.Interaction, message: str) -> None:
     sanitized = _sanitize_text(message)
     if not sanitized:
-        await interaction.response.send_message("メッセージが空です", ephemeral=True)
+        embed = ModifiedEmbeds.ErrorEmbed(title="メッセージが空です")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
         return
     await _run(interaction, f"say {sanitized}", required=_perm("rcon say"))
 
@@ -536,7 +549,7 @@ tree.add_command(whitelist_group)
 
 # ── player (サブグループ、対象への管理操作) ───────────────────────────────────
 
-player_group = app_commands.Group(name="player", description="プレイヤーへの管理操作(要上位権限)")
+player_group = app_commands.Group(name="player", description="プレイヤーへの管理操作")
 
 
 @player_group.command(name="ban", description="対象をBANする")

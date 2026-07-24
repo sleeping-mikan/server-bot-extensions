@@ -18,6 +18,7 @@ import discord
 from discord.ext import tasks
 
 from bot.client import client
+from bot.embeds import ModifiedEmbeds
 from bot.extensions import append_task
 from bot.utils import not_enough_permission, print_user, user_permission
 from core.state import ctx
@@ -112,7 +113,8 @@ async def _check_permission(interaction: discord.Interaction) -> bool:
 async def status_command(interaction: discord.Interaction) -> None:
     await print_user(logger, interaction.user)
     free_gb = _free_gb()
-    embed = discord.Embed(title="ディスク空き容量", color=discord.Color.green() if free_gb >= _state["threshold_gb"] else discord.Color.red())
+    embed_cls = ModifiedEmbeds.DefaultEmbed if free_gb >= _state["threshold_gb"] else ModifiedEmbeds.ErrorEmbed
+    embed = embed_cls(title="ディスク空き容量")
     embed.add_field(name="空き容量", value=f"{free_gb:.2f} GB", inline=True)
     embed.add_field(name="閾値", value=f"{_state['threshold_gb']} GB", inline=True)
     embed.add_field(name="チェック間隔", value=f"{_state['interval_minutes']}分", inline=True)

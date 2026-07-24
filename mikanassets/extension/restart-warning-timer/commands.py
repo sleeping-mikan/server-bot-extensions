@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 import discord
 from discord.ext import tasks
 
+from bot.embeds import ModifiedEmbeds
 from bot.extensions import append_task, write_server_in
 from bot.utils import not_enough_permission, print_user, user_permission
 from core.state import ctx
@@ -77,17 +78,17 @@ async def schedule_command(interaction: discord.Interaction, minutes: int) -> No
     if not await _check_permission(interaction):
         return
     if not (1 <= minutes <= 180):
-        await interaction.response.send_message("minutes は1〜180の範囲で指定してください", ephemeral=True)
+        embed = ModifiedEmbeds.ErrorEmbed(title="minutes は1〜180の範囲で指定してください")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
         return
 
     _target_time = datetime.now() + timedelta(minutes=minutes)
     _sent_checkpoints = {m for m in _CHECKPOINTS_MIN if m >= minutes}
 
-    embed = discord.Embed(
+    embed = ModifiedEmbeds.DefaultEmbed(
         title="再起動予告タイマーを開始しました",
         description=f"{minutes}分後 ({_target_time.strftime('%H:%M:%S')}) を目安に段階的な警告をサーバー内へ送信します。\n"
         "実際の再起動は /restart などを別途実行してください。",
-        color=discord.Color.orange(),
     )
     await interaction.response.send_message(embed=embed)
 
@@ -99,10 +100,12 @@ async def cancel_command(interaction: discord.Interaction) -> None:
     if not await _check_permission(interaction):
         return
     if _target_time is None:
-        await interaction.response.send_message("現在動作中のタイマーはありません", ephemeral=True)
+        embed = ModifiedEmbeds.ErrorEmbed(title="現在動作中のタイマーはありません")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
         return
 
     _target_time = None
     _sent_checkpoints = set()
     _broadcast_warning("再起動予告はキャンセルされました")
-    await interaction.response.send_message("タイマーを中止しました")
+    embed = ModifiedEmbeds.DefaultEmbed(title="タイマーを中止しました")
+    await interaction.response.send_message(embed=embed)

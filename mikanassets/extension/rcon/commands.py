@@ -29,9 +29,28 @@ RCON (Source RCON プロトコル、Minecraft Java サーバーが標準対応) 
 
 /extension-rcon check でこの設定状況を確認できる。
 
+## 権限レベル
+
+各コマンドの要求権限レベルは、拡張機能側の state.json ではなく **.config** の
+discord_commands.permission.commands_level に "rcon <サブコマンド名>": <レベル> という
+キーで追記して設定する。これはコアBotの他のコマンド(stop, backup apply 等)と
+全く同じ場所・同じ形式であり、コアBot側にキーが無ければ以下のデフォルト値が使われる
+(詳細は _permission_level() を参照):
+
+    rcon check              0
+    rcon config              2
+    rcon cmd                 2  (任意コマンドの無条件実行)
+    rcon list                0
+    rcon whitelist list      0
+    rcon gamemode/weather/time/difficulty/say/tp/give/xp/summon/setblock/title/
+    rcon effect give/clear/whitelist add/remove                              1
+    rcon kill                2
+    rcon player ban/pardon/kick/op/deop                                       2
+
 ## コマンド一覧 (全て /extension-rcon <name> で呼び出す)
 
 - check                          RCON設定状況とサーバーへの疎通を確認する
+- config                         RCON接続/応答のタイムアウト秒数を設定する (要上位権限)
 - cmd <command>                  任意のコマンドをそのまま送信する (要上位権限)
 - list                           オンラインプレイヤー一覧 (/list)
 - gamemode <mode> [selector]     ゲームモード変更 (selector省略時は @a)
@@ -74,13 +93,9 @@ from core.state import ctx
 tree = ctx.extension_commands_group
 logger = ctx.extension_logger
 
-# 通常のゲーム内操作コマンドに要求する最低権限レベル
-REQUIRED_LEVEL = 1
-# cmd(任意コマンド) と player ban/op 等の破壊的/管理操作に要求する最低権限レベル
-REQUIRED_LEVEL_ADMIN = 2
-
 _STATE_FILE = Path(__file__).parent / "state.json"
 _DEFAULT_STATE = {"timeout_seconds": 5.0}
+# 各コマンドの要求権限レベルは state.json ではなく .config 側(下記 _permission_level 参照)で管理する
 
 
 def _load_state() -> dict:
@@ -92,6 +107,11 @@ def _load_state() -> dict:
     except Exception as e:
         logger.error(f"failed to load state, using defaults ({e})")
         return dict(_DEFAULT_STATE)
+
+
+def _save_state() -> None:
+    with _STATE_FILE.open("w", encoding="utf-8") as f:
+        json.dump(_state, f, indent=2, ensure_ascii=False)
 
 
 _state = _load_state()
@@ -185,6 +205,21 @@ def _sanitize_text(text: str) -> str:
     return " ".join(text.splitlines()).strip()
 
 
+def _permission_level(key: str, default: int) -> int:
+    """コマンドごとの要求権限レベルを .config から読む。
+
+    コアBotの各コマンドが ctx.text.command_permission["terminal set"] のように
+    参照しているのと同じ辞書 (= config["discord_commands"]["permission"]["commands_level"]、
+    main.py で ctx.text.command_permission に代入されている実体は同じdict) を使う。
+    コアBotのキーは config_loader.py が起動時に自動補完するが、拡張機能側のキー
+    ("rcon cmd" 等) は補完対象外で .config に無ければ存在しないため、
+    その場合はここで渡した default を使う。管理者は .config の
+    discord_commands.permission.commands_level に "rcon cmd": 3 のように追記すれば
+    このBotの他のコマンドと全く同じ場所・同じ形式で権限レベルを変更できる。
+    """
+    return ctx.text.command_permission.get(key, default)
+
+
 async def _check_permission(interaction: discord.Interaction, required: int) -> bool:
     await print_user(logger, interaction.user)
     if await user_permission(interaction.user) < required:
@@ -193,7 +228,7 @@ async def _check_permission(interaction: discord.Interaction, required: int) -> 
     return True
 
 
-async def _run(interaction: discord.Interaction, command: str, *, required: int = REQUIRED_LEVEL) -> None:
+async def _run(interaction: discord.Interaction, command: str, *, required: int) -> None:
     """権限チェック → RCON実行 → 結果をembedで返す共通処理。"""
     if not await _check_permission(interaction, required):
         return
@@ -234,7 +269,8 @@ async def _run(interaction: discord.Interaction, command: str, *, required: int 
 
 @tree.command(name="check", description="RCONの設定状況と疎通を確認する")
 async def check_command(interaction: discord.Interaction) -> None:
-    await print_user(logger, interaction.user)
+    if not await _check_permission(interaction, _permission_level("rcon check", 0)):
+        return
     enabled, port, password = _rcon_connection_info()
 
     embed = discord.Embed(title="RCON設定状況", color=discord.Color.blurple())
@@ -262,18 +298,33 @@ async def check_command(interaction: discord.Interaction) -> None:
     await interaction.followup.send(embed=embed)
 
 
+@tree.command(name="config", description="RCON接続/応答のタイムアウト秒数を設定する(要上位権限)")
+@app_commands.describe(timeout_seconds="RCON接続/応答のタイムアウト秒数")
+async def config_command(interaction: discord.Interaction, timeout_seconds: float) -> None:
+    if not await _check_permission(interaction, _permission_level("rcon config", 2)):
+        return
+
+    _state["timeout_seconds"] = max(0.5, timeout_seconds)
+    _save_state()
+
+    embed = discord.Embed(title="rcon 設定", color=discord.Color.blurple())
+    embed.add_field(name="timeout_seconds", value=str(_state["timeout_seconds"]), inline=True)
+    embed.set_footer(text="権限レベルは .config の discord_commands.permission.commands_level で設定してください")
+    await interaction.response.send_message(embed=embed)
+
+
 # ── cmd (raw) ────────────────────────────────────────────────────────────────
 
 @tree.command(name="cmd", description="任意のコマンドをRCON経由で実行する(要上位権限)")
 async def cmd_command(interaction: discord.Interaction, command: str) -> None:
-    await _run(interaction, command.strip(), required=REQUIRED_LEVEL_ADMIN)
+    await _run(interaction, command.strip(), required=_permission_level("rcon cmd", 2))
 
 
 # ── list ─────────────────────────────────────────────────────────────────────
 
 @tree.command(name="list", description="オンラインプレイヤー一覧を表示する")
 async def list_command(interaction: discord.Interaction) -> None:
-    await _run(interaction, "list", required=0)
+    await _run(interaction, "list", required=_permission_level("rcon list", 0))
 
 
 # ── gamemode / weather / time / difficulty / say ────────────────────────────
@@ -284,7 +335,7 @@ async def gamemode_command(
     mode: Literal["survival", "creative", "adventure", "spectator"],
     selector: str = "@a",
 ) -> None:
-    await _run(interaction, f"gamemode {mode} {selector}")
+    await _run(interaction, f"gamemode {mode} {selector}", required=_permission_level("rcon gamemode", 1))
 
 
 @tree.command(name="weather", description="天候を変更する")
@@ -294,7 +345,7 @@ async def weather_command(
     seconds: int | None = None,
 ) -> None:
     command = f"weather {condition}" + (f" {seconds}" if seconds is not None else "")
-    await _run(interaction, command)
+    await _run(interaction, command, required=_permission_level("rcon weather", 1))
 
 
 @tree.command(name="time", description="時刻を変更する")
@@ -303,7 +354,7 @@ async def time_command(
     action: Literal["set", "add"],
     value: str,
 ) -> None:
-    await _run(interaction, f"time {action} {value}")
+    await _run(interaction, f"time {action} {value}", required=_permission_level("rcon time", 1))
 
 
 @tree.command(name="difficulty", description="難易度を変更する")
@@ -311,7 +362,7 @@ async def difficulty_command(
     interaction: discord.Interaction,
     level: Literal["peaceful", "easy", "normal", "hard"],
 ) -> None:
-    await _run(interaction, f"difficulty {level}")
+    await _run(interaction, f"difficulty {level}", required=_permission_level("rcon difficulty", 1))
 
 
 @tree.command(name="say", description="サーバー内に一斉送信する")
@@ -320,24 +371,24 @@ async def say_command(interaction: discord.Interaction, message: str) -> None:
     if not sanitized:
         await interaction.response.send_message("メッセージが空です", ephemeral=True)
         return
-    await _run(interaction, f"say {sanitized}")
+    await _run(interaction, f"say {sanitized}", required=_permission_level("rcon say", 1))
 
 
 # ── tp / give / kill / xp / summon / setblock / title ───────────────────────
 
 @tree.command(name="tp", description="指定座標へテレポートする")
 async def tp_command(interaction: discord.Interaction, selector: str, x: float, y: float, z: float) -> None:
-    await _run(interaction, f"tp {selector} {x} {y} {z}")
+    await _run(interaction, f"tp {selector} {x} {y} {z}", required=_permission_level("rcon tp", 1))
 
 
 @tree.command(name="give", description="アイテムを付与する")
 async def give_command(interaction: discord.Interaction, selector: str, item: str, count: int = 1) -> None:
-    await _run(interaction, f"give {selector} {item} {max(1, count)}")
+    await _run(interaction, f"give {selector} {item} {max(1, count)}", required=_permission_level("rcon give", 1))
 
 
 @tree.command(name="kill", description="対象を殺す")
 async def kill_command(interaction: discord.Interaction, selector: str) -> None:
-    await _run(interaction, f"kill {selector}", required=REQUIRED_LEVEL_ADMIN)
+    await _run(interaction, f"kill {selector}", required=_permission_level("rcon kill", 2))
 
 
 @tree.command(name="xp", description="経験値を付与する")
@@ -347,7 +398,7 @@ async def xp_command(
     amount: int,
     unit: Literal["points", "levels"] = "points",
 ) -> None:
-    await _run(interaction, f"xp add {selector} {amount} {unit}")
+    await _run(interaction, f"xp add {selector} {amount} {unit}", required=_permission_level("rcon xp", 1))
 
 
 @tree.command(name="summon", description="エンティティを召喚する")
@@ -359,18 +410,18 @@ async def summon_command(
     z: float | None = None,
 ) -> None:
     coords = f" {x} {y} {z}" if x is not None and y is not None and z is not None else ""
-    await _run(interaction, f"summon {entity}{coords}")
+    await _run(interaction, f"summon {entity}{coords}", required=_permission_level("rcon summon", 1))
 
 
 @tree.command(name="setblock", description="指定座標にブロックを設置する")
 async def setblock_command(interaction: discord.Interaction, x: int, y: int, z: int, block: str) -> None:
-    await _run(interaction, f"setblock {x} {y} {z} {block}")
+    await _run(interaction, f"setblock {x} {y} {z} {block}", required=_permission_level("rcon setblock", 1))
 
 
 @tree.command(name="title", description="対象にタイトルを表示する")
 async def title_command(interaction: discord.Interaction, selector: str, text: str) -> None:
     sanitized = _sanitize_text(text)
-    await _run(interaction, f'title {selector} title {{"text":"{sanitized}"}}')
+    await _run(interaction, f'title {selector} title {{"text":"{sanitized}"}}', required=_permission_level("rcon title", 1))
 
 
 # ── effect (サブグループ) ─────────────────────────────────────────────────────
@@ -386,12 +437,12 @@ async def effect_give_command(
     seconds: int = 30,
     amplifier: int = 0,
 ) -> None:
-    await _run(interaction, f"effect give {selector} {effect} {seconds} {amplifier}")
+    await _run(interaction, f"effect give {selector} {effect} {seconds} {amplifier}", required=_permission_level("rcon effect give", 1))
 
 
 @effect_group.command(name="clear", description="エフェクトを解除する")
 async def effect_clear_command(interaction: discord.Interaction, selector: str, effect: str | None = None) -> None:
-    await _run(interaction, f"effect clear {selector}" + (f" {effect}" if effect else ""))
+    await _run(interaction, f"effect clear {selector}" + (f" {effect}" if effect else ""), required=_permission_level("rcon effect clear", 1))
 
 
 tree.add_command(effect_group)
@@ -404,17 +455,17 @@ whitelist_group = app_commands.Group(name="whitelist", description="ホワイト
 
 @whitelist_group.command(name="add", description="ホワイトリストに追加する")
 async def whitelist_add_command(interaction: discord.Interaction, player: str) -> None:
-    await _run(interaction, f"whitelist add {player}")
+    await _run(interaction, f"whitelist add {player}", required=_permission_level("rcon whitelist add", 1))
 
 
 @whitelist_group.command(name="remove", description="ホワイトリストから削除する")
 async def whitelist_remove_command(interaction: discord.Interaction, player: str) -> None:
-    await _run(interaction, f"whitelist remove {player}")
+    await _run(interaction, f"whitelist remove {player}", required=_permission_level("rcon whitelist remove", 1))
 
 
 @whitelist_group.command(name="list", description="ホワイトリストを表示する")
 async def whitelist_list_command(interaction: discord.Interaction) -> None:
-    await _run(interaction, "whitelist list", required=0)
+    await _run(interaction, "whitelist list", required=_permission_level("rcon whitelist list", 0))
 
 
 tree.add_command(whitelist_group)
@@ -428,28 +479,28 @@ player_group = app_commands.Group(name="player", description="プレイヤーへ
 @player_group.command(name="ban", description="対象をBANする")
 async def player_ban_command(interaction: discord.Interaction, player: str, reason: str | None = None) -> None:
     command = f"ban {player}" + (f" {_sanitize_text(reason)}" if reason else "")
-    await _run(interaction, command, required=REQUIRED_LEVEL_ADMIN)
+    await _run(interaction, command, required=_permission_level("rcon player ban", 2))
 
 
 @player_group.command(name="pardon", description="対象のBANを解除する")
 async def player_pardon_command(interaction: discord.Interaction, player: str) -> None:
-    await _run(interaction, f"pardon {player}", required=REQUIRED_LEVEL_ADMIN)
+    await _run(interaction, f"pardon {player}", required=_permission_level("rcon player pardon", 2))
 
 
 @player_group.command(name="kick", description="対象をキックする")
 async def player_kick_command(interaction: discord.Interaction, player: str, reason: str | None = None) -> None:
     command = f"kick {player}" + (f" {_sanitize_text(reason)}" if reason else "")
-    await _run(interaction, command, required=REQUIRED_LEVEL_ADMIN)
+    await _run(interaction, command, required=_permission_level("rcon player kick", 2))
 
 
 @player_group.command(name="op", description="対象をOPにする")
 async def player_op_command(interaction: discord.Interaction, player: str) -> None:
-    await _run(interaction, f"op {player}", required=REQUIRED_LEVEL_ADMIN)
+    await _run(interaction, f"op {player}", required=_permission_level("rcon player op", 2))
 
 
 @player_group.command(name="deop", description="対象のOPを解除する")
 async def player_deop_command(interaction: discord.Interaction, player: str) -> None:
-    await _run(interaction, f"deop {player}", required=REQUIRED_LEVEL_ADMIN)
+    await _run(interaction, f"deop {player}", required=_permission_level("rcon player deop", 2))
 
 
 tree.add_command(player_group)

@@ -122,6 +122,7 @@ rcon.password=<空でない値>
 `/extension-rcon check` で設定状況と疎通を確認できます。
 
 - `/extension-rcon check` — RCON設定状況と疎通確認
+- `/extension-rcon config <timeout_seconds>` — RCON接続/応答のタイムアウト秒数を設定(要上位権限)
 - `/extension-rcon cmd <command>` — 任意コマンドをそのまま実行(要上位権限)
 - `/extension-rcon list` — オンラインプレイヤー一覧
 - `/extension-rcon gamemode <mode> [selector=@a]`
@@ -146,22 +147,38 @@ rcon.password=<空でない値>
 重複するだけの薄いラッパーだったため撤去しました。経緯は [plan.json](plan.json) の `rcon` エントリの
 `notes` を参照してください。
 
-#### rcon の権限レベル
+#### rcon の権限レベルは .config で設定する
 
-このBotの権限レベルは `.config` の `discord_commands.admin.members` でDiscordユーザーごとに
-整数(0〜)を割り当てる仕組みで、コアBotのコマンドも `commands_level`(例: `stop: 1`,
-`backup apply: 3`, `permission change: 4`)でコマンドごとに必要レベルを決めています。
-`rcon` 拡張はこのレベル体系にそのまま乗っかっており、`bot.utils.user_permission()` で
-実行者のレベルを取得し、コマンドごとの閾値と比較しています(`commands.py` の
-`REQUIRED_LEVEL` / `REQUIRED_LEVEL_ADMIN` 定数)。
+コアBotはコマンドごとの要求権限レベルを `.config` の
+`discord_commands.permission.commands_level`(例: `"stop": 1`, `"backup apply": 3`,
+`"permission change": 4`)に一元管理しており、`ctx.text.command_permission` はこの
+辞書をそのまま指しています(`main.py`: `ctx.text.command_permission =
+config["discord_commands"]["permission"]["commands_level"]`)。
 
-| レベル | 対象コマンド |
+`rcon` 拡張は最初 `state.json` 側に独自の権限設定を持たせていましたが、それだと
+このBotの他の全コマンドとは別の場所・別の仕組みで権限を管理することになり不整合でした。
+そのため `rcon` の各コマンドも `"rcon <サブコマンド名>"` というキーで**同じ
+`commands_level` 辞書**を直接参照する設計に変更しています。`.config` にキーが
+存在すればその値を、無ければ以下のデフォルト値を使います:
+
+| デフォルトレベル | 対象コマンド(`.config`でのキー例) |
 |---|---|
-| 0(誰でも) | `check`, `list`, `whitelist list` |
-| 1(`REQUIRED_LEVEL`、既定) | `gamemode`, `weather`, `time`, `difficulty`, `say`, `tp`, `give`, `xp`, `summon`, `setblock`, `title`, `effect give/clear`, `whitelist add/remove` |
-| 2(`REQUIRED_LEVEL_ADMIN`) | `cmd`(任意コマンド)、`kill`、`player ban/pardon/kick/op/deop` |
+| 0(誰でも) | `rcon check`, `rcon list`, `rcon whitelist list` |
+| 1 | `rcon gamemode`, `rcon weather`, `rcon time`, `rcon difficulty`, `rcon say`, `rcon tp`, `rcon give`, `rcon xp`, `rcon summon`, `rcon setblock`, `rcon title`, `rcon effect give`, `rcon effect clear`, `rcon whitelist add`, `rcon whitelist remove` |
+| 2 | `rcon config`, `rcon cmd`(任意コマンド)、`rcon kill`、`rcon player ban/pardon/kick/op/deop` |
 
-`cmd` は `allow_cmd` のような許可リストを一切通さない無条件の生コマンド実行なので、
-コアBotの `/cmd serverin`(既定 level 1)より一段高い level 2 を要求しています。
-数値の意味自体(どのDiscordユーザーがどのレベルか)はコアBot側の `.config` の設定に依存するため、
-実際に誰が何を実行できるかは各サーバーの `admin.members` 設定を確認してください。
+権限レベルを変更したい場合は、Discordコマンドではなく `.config` を直接編集してください。例:
+
+```json
+"discord_commands": {
+  "permission": {
+    "commands_level": {
+      "rcon cmd": 3,
+      "rcon gamemode": 0
+    }
+  }
+}
+```
+
+`rcon cmd` は `allow_cmd` のような許可リストを一切通さない無条件の生コマンド実行なので、
+コアBotの `/cmd serverin`(既定 level 1)より一段高いデフォルト level 2 にしています。

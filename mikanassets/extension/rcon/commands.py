@@ -36,7 +36,7 @@ discord_commands.permission.commands_level に "rcon <サブコマンド名>": <
 キーで管理する。これはコアBotの他のコマンド(stop, backup apply 等)と全く同じ
 場所・同じ形式。デフォルト値は _KNOWN_PERMISSIONS にまとめてあり(下記)、
 拡張ロード時に .config にまだ無いキーがあれば自動的にこのデフォルト値で
-書き足す(初回コマンド実行時にファイルへ反映される。詳細は
+書き足し、その場で .config ファイルへ即座に反映する(詳細は
 _register_missing_permission_keys() / _perm() を参照)。つまり管理者は
 .config を開けば "rcon cmd" 等のキーが既に存在した状態になっており、
 値を書き換えるだけでよい(何もしなければデフォルトのまま動く)。
@@ -241,28 +241,33 @@ def _sanitize_text(text: str) -> str:
     return " ".join(text.splitlines()).strip()
 
 
-_permission_keys_pending_persist = False
-
-
 def _register_missing_permission_keys() -> None:
-    """.config に無い rcon の権限キーを _KNOWN_PERMISSIONS の値で登録する(メモリ上のみ)。
+    """.config に無い rcon の権限キーを _KNOWN_PERMISSIONS の値で登録し、即座に .config へ書き戻す。
 
     コアBotは core/config_loader.py が起動時に INITIAL_COMMAND_PERMISSION の
     未登録キーを .config へ補完しているが、これは対象がコア command_desc に
     登録されたコマンドに限られ、拡張機能のキーは補完されない。同じ体験(.configを
     開けばキーが既に存在し、値を書き換えるだけでよい)を拡張機能側でも再現するため、
     ロード時に不足しているキーを ctx.text.command_permission (= .config の
-    commands_level と同一のdict) へ直接書き込む。実際のファイルへの反映は
-    _check_permission() の初回呼び出し時に行う(モジュールimport時点は非同期
-    コンテキストではなく rewrite_config() を await できないため)。
+    commands_level と同一のdict) へ直接書き込む。
+
+    拡張のロード (bot/setup.py の setup_commands() -> bot/extensions.py の load())
+    は main.py の起動シーケンス中、client.run() でDiscordのイベントループが
+    始まる前の完全に同期的なフェーズで行われる(main.py: 151行目の
+    asyncio.run(load_text()) は setup_commands() 呼び出し時点で既に完了・
+    クローズ済み)。つまりこの時点で実行中のイベントループは存在しないため、
+    async def だが中身は同期的なファイル書き込みでしかない rewrite_config() を
+    asyncio.run() で問題なく呼べる。よってコマンド実行を待たず、ロード完了と
+    同時に .config へ反映する。
     """
-    global _permission_keys_pending_persist
+    added = False
     for key, default in _KNOWN_PERMISSIONS.items():
         if key not in ctx.text.command_permission:
             ctx.text.command_permission[key] = default
-            _permission_keys_pending_persist = True
-    if _permission_keys_pending_persist:
-        logger.info("registered missing rcon permission keys into .config (pending persist)")
+            added = True
+    if added:
+        logger.info("registered missing rcon permission keys, writing to .config")
+        asyncio.run(rewrite_config())
 
 
 _register_missing_permission_keys()
@@ -278,16 +283,7 @@ def _perm(key: str) -> int:
     return ctx.text.command_permission.get(key, _KNOWN_PERMISSIONS[key])
 
 
-async def _persist_permission_keys_if_needed() -> None:
-    global _permission_keys_pending_persist
-    if _permission_keys_pending_persist:
-        await rewrite_config()
-        _permission_keys_pending_persist = False
-        logger.info("persisted rcon permission keys to .config")
-
-
 async def _check_permission(interaction: discord.Interaction, required: int) -> bool:
-    await _persist_permission_keys_if_needed()
     await print_user(logger, interaction.user)
     if await user_permission(interaction.user) < required:
         await not_enough_permission(interaction, logger)

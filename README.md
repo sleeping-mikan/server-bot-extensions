@@ -15,7 +15,7 @@ mikanassets/
     disk-space-watchdog/commands.py          ← ディスク容量監視
     backup-watch/commands.py                 ← バックアップ未実施リマインド + 自動整理
     downtime-notifier/commands.py            ← 予期しないダウン通知
-    idle-hours-notice/commands.py            ← 静かな時間帯の告知
+    rcon/commands.py                         ← RCON経由コマンド実行(確実な結果取得 + エイリアス多数)
 ```
 
 `mikanassets/` 以下は server-bot-v3 が実際に読み込むディレクトリ構成と同じです。
@@ -37,7 +37,10 @@ server-bot-v3 を配置しているディレクトリの `mikanassets/extension/
 
 判断の詳細(KEEP/CUT/MERGEの理由)は [plan.json](plan.json) の各エントリの `notes` を参照してください。
 `custom-whitelist-request` / `uptime` / `dice-omikuji` / `safe-console-whitelist` / `cross-server-relay` は
-上記基準でCUTしています。`tps-lag-report` はサーバー標準出力を読むフックが今の拡張APIに無いため実装不可(blocked)です。
+上記基準でCUTしています。`idle-hours-notice` は一度実装しましたが、オーナー本人から
+「意味が分からない」というフィードバックを受け撤去しました。`tps-lag-report` は本来サーバー標準出力を
+読むフックが無いため実装不可(blocked)でしたが、後述の `rcon` 拡張の追加でこの制約自体が
+実質的に解消されています。
 
 ## 実装済み拡張機能
 
@@ -93,8 +96,53 @@ server-bot-v3 を配置しているディレクトリの `mikanassets/extension/
 
 - `/extension-downtime-notifier config [grace_seconds] [channel]`
 
-### idle-hours-notice
+### rcon
 
-設定した時間帯の開始時刻に1日1回、監視が手薄になる旨をDiscordへ通知します。
+Minecraft の RCON プロトコルで直接コマンドを送り、送ったコマンドに対する**サーバーの応答を
+そのまま確実に**受け取ります。標準ライブラリ(asyncio/struct)のみで実装しており、追加の
+pipインストールは不要です。
 
-- `/extension-idle-hours-notice config [start_hour] [channel]`
+**なぜ必要か**: コアBotの `/cmd serverin` は実は結果を正確に取得できていません
+(`bot/commands/cmd.py` が `ctx.is_back_discord=True` にしてから最大3秒
+`ctx.cmd_logs` をポーリングし、コマンド送信後に**次に来たstdoutの1行を無条件にその結果として
+扱っている**だけ)。拡張機能側の `write_server_in()` に至っては応答を一切拾わない
+fire-and-forgetです。RCONはコマンドと応答が同一TCP往復で1対1対応する専用プロトコルなので、
+この「たまたま次に出た行」問題が原理的に起きません(フェイクRCONサーバーを使って
+認証成功/失敗・空応答・エラー応答の4パターンで動作検証済みです)。
+
+**前提**: `server.properties` で以下を設定し、サーバーを再起動しておく必要があります。
+
+```
+enable-rcon=true
+rcon.port=25575
+rcon.password=<空でない値>
+```
+
+パスワードはDiscordに入力させず、`server.properties` から拡張機能が直接読み取ります。
+`/extension-rcon check` で設定状況と疎通を確認できます。
+
+- `/extension-rcon check` — RCON設定状況と疎通確認
+- `/extension-rcon cmd <command>` — 任意コマンドをそのまま実行(要上位権限)
+- `/extension-rcon list` — オンラインプレイヤー一覧
+- `/extension-rcon gamemode <mode> [selector=@a]`
+- `/extension-rcon weather <clear|rain|thunder> [seconds]`
+- `/extension-rcon time <set|add> <value>`
+- `/extension-rcon difficulty <peaceful|easy|normal|hard>`
+- `/extension-rcon say <message>`
+- `/extension-rcon tp <selector> <x> <y> <z>`
+- `/extension-rcon give <selector> <item> [count]`
+- `/extension-rcon kill <selector>`(要上位権限)
+- `/extension-rcon xp <selector> <amount> [unit=points|levels]`
+- `/extension-rcon summon <entity> [x] [y] [z]`
+- `/extension-rcon setblock <x> <y> <z> <block>`
+- `/extension-rcon title <selector> <text>`
+- `/extension-rcon effect give|clear`
+- `/extension-rcon whitelist add|remove|list`
+- `/extension-rcon player ban|pardon|kick|op|deop`(要上位権限)
+- `/extension-rcon execute run <chain>` — execute の続き(as/at/if等)をそのまま実行
+- `/extension-rcon execute as|at|if-entity <selector> <command>` — よく使う execute パターンのショートカット
+
+`execute` は as/at/if/unless/positioned 等を自由に連結できる巨大なコマンドで、
+Discordの構造化引数だけで全パターンを再現するのは非現実的なため、`run` で任意チェインを
+そのまま流せるようにしつつ、特に使用頻度の高い `as` / `at` / `if-entity` だけを
+ショートカットとして用意しています。

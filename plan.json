@@ -17,9 +17,10 @@
       "bot.client.client (discord.Client) を直接importすればチャンネル取得/送信も可能"
     ],
     "known_limitations": [
-      "サーバーの標準出力を拡張側で直接フックする仕組みは無い(公式ドキュメントで「フック機能は計画中」と明記)。そのためコマンド実行結果を読み取って加工する系の拡張は現状実装不可。",
-      "write_server_in() は渡した文字列に改行を含めると複数コマンドとして注入されてしまう(ServerProcess.write が command + \"\\n\" をそのまま stdin に書くため)。ユーザー入力を渡す拡張は改行のサニタイズが必須。",
-      "ctx.use_stop はサーバープロセス終了時に「意図的な停止か/クラッシュか」を区別する内部フラグに見えるが、クラッシュ検知時も stdout.py の読み取りスレッドが即座に True へ強制するため、外部から定期ポーリングする拡張機能ではこの2つを信頼して区別できない。'クラッシュ検知' を謳う拡張は誤検知(通常の/stop/ restartでも発火)するため実装しない。"
+      "サーバーの標準出力を拡張側で直接フックする仕組みは無い(公式ドキュメントで「フック機能は計画中」と明記)。そのためコマンド実行結果を読み取って加工する系の拡張は現状実装不可 — ただし rcon 拡張(下記)はRCONという別プロトコルを使うことでこの制約自体を回避している。",
+      "write_server_in() は渡した文字列に改行を含めると複数コマンドとして注入されてしまう(ServerProcess.write が command + \"\\n\" をそのまま stdin に書くため)。ユーザー入力を渡す拡張は改行のサニタイズが必須。RCONはコマンド1個=1パケットなのでこの注入経路自体が存在しない。",
+      "ctx.use_stop はサーバープロセス終了時に「意図的な停止か/クラッシュか」を区別する内部フラグに見えるが、クラッシュ検知時も stdout.py の読み取りスレッドが即座に True へ強制するため、外部から定期ポーリングする拡張機能ではこの2つを信頼して区別できない。'クラッシュ検知' を謳う拡張は誤検知(通常の/stop/ restartでも発火)するため実装しない。",
+      "コアBotの /cmd serverin も実は結果を正確に取得できていない: bot/commands/cmd.py が ctx.is_back_discord=True にしてから最大3秒 ctx.cmd_logs をポーリングし、コマンド送信後に『次に来たstdoutの1行』を無条件にその結果として扱っている(server/stdout.py)。他のログ行の割り込みや複数行応答・タイムアウトに弱く、正確性は保証されない。RCONはコマンドと応答が同一TCP往復で1対1対応するため、この問題が原理的に起きない。"
     ]
   },
   "review_pass_2026-07-24": "1人目(ユーザー)がquick-commandsの冗長性を指摘、それを踏まえて2人目(共同開発者エージェント)に全アイデアの要否をレビューさせた。以下 extensions[] の status はそのレビュー後の最終結論。",
@@ -117,13 +118,28 @@
     {
       "id": "idle-hours-notice",
       "name": "静かな時間帯の告知",
-      "status": "implemented",
+      "status": "cut",
       "category": "general",
-      "compatible_servers": ["any"],
-      "summary": "設定した時間帯(既定 深夜0時〜6時)の開始時刻に1日1回、監視が手薄になる旨をDiscordへ通知する。",
-      "features": ["append_task で時刻ベースにチェックし1日1回だけ発火", "/extension-idle-hours-notice config で時間帯・通知先チャンネルを設定"],
-      "apis_used": ["append_task", "extension_commands_group", "bot.client.client"],
-      "notes": "review_pass_2026-07-24: 共同開発者の新規提案。実用性は他案より弱いが『身内で遊ぶ時間を合わせる合図』として最小構成で実装。"
+      "notes": "review_pass_2026-07-24: 一旦実装したが、オーナー本人から『意味が分からないので不要』とフィードバックを受け撤去した(2026-07-24)。共同開発者エージェントが提案した3案の中でも一番弱いという注記付きだった案で、実際に使う側の判断としてはCUTが妥当。"
+    },
+    {
+      "id": "rcon",
+      "name": "RCON経由コマンド実行",
+      "status": "implemented",
+      "category": "minecraft-vanilla-like",
+      "compatible_servers": ["vanilla", "paper", "spigot", "fabric", "forge (RCON対応サーバー全般)"],
+      "summary": "Minecraft の RCON プロトコル(Source RCON)をstdlibのみで実装し、コマンドとその実行結果を確実に1対1で取得する。オーナー本人からのリクエストで追加。/cmd serverin の『次に来たstdout行を結果とみなす』不正確な仕組みと write_server_in の完全fire-and-forgetの両方を置き換える。",
+      "features": [
+        "/extension-rcon check — server.propertiesのRCON設定状況と疎通確認",
+        "/extension-rcon cmd <command> — 任意コマンドを直接実行(要上位権限)",
+        "/extension-rcon list / gamemode / weather / time / difficulty / say / tp / give / kill / xp / summon / setblock / title — 個別コマンドのタイプ付きエイリアス",
+        "/extension-rcon effect give|clear",
+        "/extension-rcon whitelist add|remove|list",
+        "/extension-rcon player ban|pardon|kick|op|deop (要上位権限)",
+        "/extension-rcon execute run|as|at|if-entity — execute コマンドのラッパー(runは任意チェインをそのまま実行)"
+      ],
+      "apis_used": ["extension_commands_group", "ctx.server_path (server.propertiesの読み取り)", "asyncio/struct によるRCONクライアント自前実装(追加pip不要)"],
+      "notes": "review_pass_2026-07-24: RCON接続情報(enable-rcon/rcon.port/rcon.password)は server.properties から読み取り、Discordにパスワードを入力させない設計にした。Bot=RCON接続元は同一マシン前提でhostは127.0.0.1固定。フェイクRCONサーバーを立てて認証成功/失敗・空応答・エラーメッセージ応答の4パターンをテスト済み。これによりtps-lag-reportがblockedだった根本原因(標準出力を読む手段が無い)は rcon cmd 経由で実質解消された(下記tps-lag-reportのnotes参照)。"
     },
     {
       "id": "custom-whitelist-request",
@@ -156,9 +172,9 @@
     {
       "id": "tps-lag-report",
       "name": "TPS/ラグレポート",
-      "status": "blocked",
+      "status": "superseded_by_rcon",
       "category": "minecraft-vanilla-like",
-      "notes": "サーバーの標準出力を読み取るフックが無いため、公式の「フック機能(計画中)」が実装されるまで着手不可。"
+      "notes": "review_pass_2026-07-24: extension_commands_group の標準API(write_server_in等)経由では引き続きblockedのままだが、rcon拡張の追加で実質的に解消。paper/spigot/forge系サーバーなら `/extension-rcon cmd tps` や `/extension-rcon cmd forge tps` でそのまま結果が返る。専用の整形コマンドは今のところ作らず、rconの cmd で十分としている。"
     },
     {
       "id": "cross-server-relay",

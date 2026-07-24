@@ -1,0 +1,364 @@
+"""wv_blockcolors — 実ブロックのテクスチャ色を、Mojang公式配布のクライアントjarから
+「本当に必要になった時だけ」その場で取り出して色を求め、ローカルにキャッシュし続けるモジュール。
+
+## 設計方針: 知らないブロックが出てきた時だけAPIを叩く。叩く時は全部持ってくる
+
+ブロックID→色の対応表を手作業で用意すると、バージョンアップでブロックが増える度に
+メンテナンスが必要になる。そこで、Mojangが誰でも無認証でダウンロードできる形で公開している
+クライアントjar(https://piston-meta.mojang.com/ のバージョンマニフェスト経由、ランチャー
+自体が使うのと同じ公式配布物)を情報源にしつつ、**jar全体(数十MB)を毎回ダウンロードする
+ことはしない**。JARはZIP形式であり、MojangのCDNはHTTP Rangeリクエストに対応しているため、
+`zipfile.ZipFile` にRangeリクエストで範囲だけ取ってくるファイル様オブジェクト
+(`_HTTPRangeFile`)を渡すことで、jar全体をダウンロードせずに済む。
+
+ネットワークへは「まだ見たことが無いブロックに遭遇した時」だけアクセスする。ただし
+一度アクセスする以上、ZIPの中央ディレクトリ(ファイル一覧)は既に取得済みなので、
+**そのタイミングでその場にある全ブロックテクスチャをまとめて取得してキャッシュする**
+(1個ずつ都度取得する場合との差は、ブロックテクスチャ1269個で実測+18秒・+3.4MB程度で、
+中央ディレクトリ自体の取得コスト(約3.3MB)と比べて誤差程度。中央ディレクトリを開く
+コストを1個のためだけに払うのはもったいないので、開いたなら全部持ってきてしまう方針)。
+HTTP接続はkeep-aliveで使い回す(`http.client.HTTPSConnection`を1個のブロックテクスチャ
+毎に使い捨てず持続させる)ことで、大量の小さいRangeリクエストでも高速に処理できる。
+
+取得した色は既知のブロック(テクスチャ名)についてはバージョンをまたいで永続キャッシュ
+(`block_color_cache/colors.json`)に貯め続けるため、一度取得しきったバージョンでは
+以後 `/map` を何度実行してもネットワークへ一切アクセスしない(テクスチャの基本色が
+version間で変わることは稀なので、多少古いバージョンで解決した色を使い回しても実用上
+問題にならない、という判断)。存在しないテクスチャ名(対応表のヒューリスティックが
+外れた場合)は `missing` として記録する。
+
+取得した色はテクスチャ画像そのものではなく1テクスチャにつきRGB1個の平均値のみで、
+元の画像を再構成できる情報量ではない(著作物であるテクスチャそのものの再配布ではなく、
+そこから導出した統計値をローカルにキャッシュしているだけ)。
+
+## 色そのものについて
+
+標高(高さ)による陰影は行わない。バイオームによる色補正は、草ブロック上面・葉・水などの
+「バイオーム色を掛け合わせる前提のグレースケール マスク」テクスチャ(BIOME_TINTED_BLOCKS)
+に限って適用する(それ以外の大多数のブロックは実テクスチャの平均色をそのまま使う)。
+
+経緯: 当初は標高陰影・バイオーム補正の両方を撤去し、テクスチャの平均色を常にそのまま
+使う実装にしていたが、オーナー本人が実機で確認したところ、草ブロック上面・葉・水などの
+素の平均色は緑や青ではなく中間的なグレーになる(これらはMinecraft本体側でも常に
+バイオーム色を掛け合わせる前提の未着色テクスチャであるため)ため、マップ全体が
+「緑が少なすぎる」灰色寄りの見た目になってしまった。オーナー本人から『バイオームだけ
+戻してほしい』という指定を受け、標高陰影は撤去したまま、バイオームによるティントのみ
+BIOME_TINTED_BLOCKSに該当するブロックに限定して復元した。
+"""
+
+from __future__ import annotations
+
+import http.client
+import io
+import json
+import urllib.request
+import zipfile
+from pathlib import Path
+from urllib.parse import urlsplit
+
+from core.state import ctx
+
+from wv_imaging import Image
+
+logger = ctx.extension_logger
+
+VERSION_MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
+HTTP_TIMEOUT = 30.0
+HTTP_HEADERS = {"User-Agent": "server-bot-extensions-pack/world-visualizer"}
+
+_CACHE_DIR = Path(__file__).parent / "block_color_cache"
+_COLORS_FILE = _CACHE_DIR / "colors.json"
+_JAR_URLS_FILE = _CACHE_DIR / "jar_urls.json"
+
+# ブロック名(minecraft:接頭辞を除いたもの)からテクスチャファイル名が単純一致しない
+# もの、または上面(このマップは真上から見た図なので上面のテクスチャが欲しい)を
+# 明示的に指定する対応表。ここに無いブロックは「テクスチャファイル名 == ブロック名」を
+# 前提に直接引く(将来追加される大半の新規ブロックはこの命名規則に従うため、
+# この対応表を都度更新しなくてもある程度は自動的に拾える)。
+TEXTURE_NAME_OVERRIDES: dict[str, str] = {
+    "grass_block": "grass_block_top",
+    "podzol": "podzol_top",
+    "mycelium": "mycelium_top",
+    "dirt_path": "dirt_path_top",
+    "farmland": "farmland",
+    "water": "water_still",
+    "lava": "lava_still",
+    "frosted_ice": "frosted_ice_0",
+    "muddy_mangrove_roots": "muddy_mangrove_roots_side",
+}
+
+# 実テクスチャがグレースケールの「マスク」で、実際の表示色はバイオーム毎の色を
+# 掛け合わせて決まるブロック群(草ブロック上面・葉・水など)。Mojangのcolormap PNG
+# (バイオームの温度/湿度から正確なティント色を引く仕組み)までは再現せず、
+# wv_worldmap.BIOME_COLORS を代用のティント色源として乗算する簡易近似。
+BIOME_TINTED_BLOCKS: set[str] = {
+    "grass_block", "short_grass", "tall_grass", "fern", "large_fern", "grass",
+    "oak_leaves", "spruce_leaves", "birch_leaves", "jungle_leaves",
+    "acacia_leaves", "dark_oak_leaves", "mangrove_leaves",
+    "vine", "lily_pad", "water", "sugar_cane", "kelp", "seagrass", "tall_seagrass",
+}
+
+
+# ── Mojang版マニフェストからバージョン検出/jar URL解決(結果はキャッシュする) ──────
+
+def detect_minecraft_version(state: dict) -> str | None:
+    """マップ描画に使うMinecraftバージョン文字列を決める。ネットワークは使わない。
+
+    1. state.json に手動設定(/extension-world-visualizer config)があればそれを最優先する。
+    2. 無ければ、vanilla/Paper系サーバーが起動時に自動生成する version_history.json の
+       currentVersion を読む(RCON等を使わずファイルだけで済む唯一の自動検出手段)。
+    3. どちらも無ければ None(呼び出し側でブロック色取得を諦める)。
+    """
+    manual = state.get("minecraft_version")
+    if manual:
+        return str(manual)
+    path = ctx.server_path / "version_history.json"
+    if not path.exists():
+        return None
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        version = data.get("currentVersion")
+        return str(version) if version else None
+    except Exception as e:
+        logger.error(f"failed to read version_history.json ({e})")
+        return None
+
+
+def _http_get_json(url: str) -> dict:
+    req = urllib.request.Request(url, headers=HTTP_HEADERS)
+    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _load_jar_url_cache() -> dict[str, str]:
+    if not _JAR_URLS_FILE.exists():
+        return {}
+    try:
+        with _JAR_URLS_FILE.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        logger.error(f"failed to read jar url cache ({e})")
+        return {}
+
+
+def _save_jar_url_cache(cache: dict[str, str]) -> None:
+    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    with _JAR_URLS_FILE.open("w", encoding="utf-8") as f:
+        json.dump(cache, f)
+
+
+def get_client_jar_url(version: str) -> str:
+    """指定バージョンのクライアントjar URLを返す。一度解決したらローカルへ永続キャッシュし、
+    以後同じバージョンではMojangのバージョンマニフェストへ再アクセスしない。"""
+    cached = _load_jar_url_cache()
+    if version in cached:
+        return cached[version]
+
+    manifest = _http_get_json(VERSION_MANIFEST_URL)
+    entry = next((v for v in manifest.get("versions", []) if v.get("id") == version), None)
+    if entry is None:
+        raise ValueError(f"Minecraft version {version!r} not found in Mojang's version manifest")
+    version_meta = _http_get_json(entry["url"])
+    client_url = version_meta["downloads"]["client"]["url"]
+
+    cached[version] = client_url
+    _save_jar_url_cache(cached)
+    return client_url
+
+
+# ── HTTP Rangeリクエストだけでzipfile.ZipFileを読ませるためのファイル様オブジェクト ──
+# ブロックテクスチャを一括取得する都合上、数百〜千件超のRangeリクエストを連続で
+# 発行するため、リクエスト毎に新規接続を張る urllib.request ではなく
+# http.client の持続接続(keep-alive)を使い回して高速化する
+# (実測: 1269テクスチャを新規接続無しの持続接続で約18秒・約3.4MBで取得できた)。
+
+class _HTTPRangeFile:
+    """zipfile.ZipFile が要求した範囲だけをHTTP Rangeリクエストで都度取得する。
+    central directory(ファイル一覧、バージョン毎に1回)と、実際にopen()した個々の
+    エントリの圧縮データだけがネットワーク越しに転送され、jar全体は取得しない。"""
+
+    def __init__(self, url: str) -> None:
+        parts = urlsplit(url)
+        self._path = parts.path + (f"?{parts.query}" if parts.query else "")
+        conn_cls = http.client.HTTPSConnection if parts.scheme == "https" else http.client.HTTPConnection
+        self._conn = conn_cls(parts.hostname, parts.port, timeout=HTTP_TIMEOUT)
+        self._pos = 0
+        self._size = self._fetch_range(0, 0)[0]
+
+    def _fetch_range(self, start: int, end: int) -> tuple[int, bytes]:
+        headers = {**HTTP_HEADERS, "Range": f"bytes={start}-{end}"}
+        self._conn.request("GET", self._path, headers=headers)
+        resp = self._conn.getresponse()
+        data = resp.read()
+        if resp.status not in (200, 206):
+            raise ValueError(f"unexpected HTTP status {resp.status} for ranged request to {self._path}")
+        content_range = resp.getheader("Content-Range")
+        if not content_range:
+            raise ValueError(f"server did not respond with Content-Range for {self._path} (Range requests unsupported?)")
+        total = int(content_range.split("/")[-1])
+        return total, data
+
+    def seekable(self) -> bool:
+        return True
+
+    def tell(self) -> int:
+        return self._pos
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        if whence == 0:
+            self._pos = offset
+        elif whence == 1:
+            self._pos += offset
+        elif whence == 2:
+            self._pos = self._size + offset
+        else:
+            raise ValueError(f"unsupported whence: {whence}")
+        return self._pos
+
+    def read(self, n: int = -1) -> bytes:
+        if n is None or n < 0:
+            end = self._size - 1
+        elif n == 0:
+            return b""
+        else:
+            end = min(self._pos + n - 1, self._size - 1)
+        if self._pos > end or self._pos >= self._size:
+            return b""
+        _, data = self._fetch_range(self._pos, end)
+        self._pos += len(data)
+        return data
+
+    def close(self) -> None:
+        self._conn.close()
+
+
+def _average_texture_color(image: "Image.Image") -> tuple[int, int, int] | None:
+    """テクスチャ1枚の代表色(平均RGB)を計算する。water_still等のアニメーション
+    テクスチャは正方形のフレームを縦に連結したスプライトシートなので、先頭フレーム
+    (画像の幅を1辺とする正方形)だけを使う。完全透明なピクセルは平均から除外する。"""
+    rgba = image.convert("RGBA")
+    w, h = rgba.size
+    if w <= 0 or h <= 0:
+        return None
+    frame_h = min(h, w)
+    rgba = rgba.crop((0, 0, w, frame_h))
+    r_total = g_total = b_total = count = 0
+    for r, g, b, a in rgba.getdata():
+        if a < 16:
+            continue
+        r_total += r
+        g_total += g
+        b_total += b
+        count += 1
+    if count == 0:
+        return None
+    return r_total // count, g_total // count, b_total // count
+
+
+# ── 色キャッシュ(バージョンをまたいで永続、colors + missing の2セクション) ────────
+
+def load_color_cache() -> dict:
+    if not _COLORS_FILE.exists():
+        return {"colors": {}, "missing": []}
+    try:
+        with _COLORS_FILE.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        return {"colors": data.get("colors", {}), "missing": data.get("missing", [])}
+    except Exception as e:
+        logger.error(f"failed to read block color cache ({e})")
+        return {"colors": {}, "missing": []}
+
+
+def save_color_cache(cache: dict) -> None:
+    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    with _COLORS_FILE.open("w", encoding="utf-8") as f:
+        json.dump(cache, f)
+
+
+def clear_color_cache() -> None:
+    if _COLORS_FILE.exists():
+        _COLORS_FILE.unlink()
+    if _JAR_URLS_FILE.exists():
+        _JAR_URLS_FILE.unlink()
+
+
+def resolve_unknown_textures(version: str, texture_keys: set[str], cache: dict) -> None:
+    """texture_keys の中に cache["colors"]/missing のどちらにも無いものが1つでもあれば、
+    クライアントjarを開いて **assets/minecraft/textures/block/ 配下の全PNG** を一括取得し、
+    まだキャッシュに無いものを cache["colors"] へ追加してディスクへ保存する。texture_keys
+    自体は「取得しに行くべきかどうか」の判定にのみ使い、実際に取得する範囲はそれより広い
+    (中央ディレクトリを開くコストを1個のためだけに払うのはもったいないため)。
+    全キーが既知/missing判定済みならネットワークには一切触れない。呼び出し側で cache は
+    使い回すこと(この関数は cache を直接書き換える)。
+
+    重い処理(ネットワークI/O)を伴うので、呼び出し側で asyncio.to_thread に包むこと。
+    """
+    colors = cache.setdefault("colors", {})
+    missing = set(cache.setdefault("missing", []))
+    trigger = {key for key in texture_keys if key not in colors and key not in missing}
+    if not trigger:
+        return
+
+    try:
+        jar_url = get_client_jar_url(version)
+        remote = _HTTPRangeFile(jar_url)
+        zf = zipfile.ZipFile(remote)
+    except Exception as e:
+        logger.error(f"failed to open remote client jar for {version} ({e})")
+        return  # ネットワーク/バージョン解決の失敗はmissing扱いにしない(一時的な失敗の可能性があるため)
+
+    try:
+        names = [n for n in zf.namelist() if n.startswith("assets/minecraft/textures/block/") and n.endswith(".png")]
+        newly_resolved = 0
+        for name in names:
+            key = Path(name).stem
+            if key in colors or key in missing:
+                continue
+            try:
+                with zf.open(name) as f:
+                    image = Image.open(io.BytesIO(f.read()))
+                color = _average_texture_color(image)
+            except Exception as e:
+                logger.error(f"failed to fetch/decode texture {name} ({e})")
+                continue  # 一時的な失敗の可能性があるのでmissingにはしない、次回また試す
+            if color is None:
+                missing.add(key)
+                continue
+            colors[key] = list(color)
+            newly_resolved += 1
+
+        # trigger のうち、全ブロックテクスチャを一括取得し終えてもなお colors に
+        # 無いものは、対応表のヒューリスティックが外れて実在しないテクスチャ名を
+        # 探していたということなので missing に記録する(そうしないと、次に同じ
+        # ブロックに遭遇する度に「未知のキーがある」と誤判定してjarを開き直して
+        # しまう)。
+        for key in trigger:
+            if key not in colors and key not in missing:
+                missing.add(key)
+    finally:
+        remote.close()
+
+    cache["missing"] = sorted(missing)
+    logger.info(f"resolved {newly_resolved} block texture color(s) for {version} (full block texture set fetched, {len(colors)} total cached)")
+    save_color_cache(cache)
+
+
+def resolve_block_color(
+    block_name: str, colors: dict[str, list[int]], biome_color: tuple[int, int, int]
+) -> tuple[tuple[int, int, int] | None, str]:
+    """(色, texture_key) を返す。色が None の場合、texture_key は「まだ解決できていない
+    ため後で resolve_unknown_textures に渡すべきキー」を表す。BIOME_TINTED_BLOCKS に
+    該当するブロック(草ブロック上面・葉・水など)のみ biome_color を掛け合わせ、
+    それ以外はテクスチャの平均色をそのまま返す。"""
+    short = block_name.split(":", 1)[-1]
+    texture_key = TEXTURE_NAME_OVERRIDES.get(short, short)
+    for key in (texture_key, f"{short}_top", f"{short}_still", short):
+        raw = colors.get(key)
+        if raw is not None:
+            r, g, b = raw
+            if short in BIOME_TINTED_BLOCKS:
+                br, bg, bb = biome_color
+                return ((r * br) // 255, (g * bg) // 255, (b * bb) // 255), texture_key
+            return (int(r), int(g), int(b)), texture_key
+    return None, texture_key

@@ -16,7 +16,7 @@ mikanassets/
     backup-watch/commands.py                 ← バックアップ未実施リマインド + 自動整理
     downtime-notifier/commands.py            ← 予期しないダウン通知
     rcon/commands.py                         ← RCON経由コマンド実行(確実な結果取得 + エイリアス多数)
-    world-visualizer/commands.py             ← ワールド全体マップ画像 + プレイヤー所持品画像
+    world-visualizer/                        ← ワールド全体マップ画像 + プレイヤー所持品画像(複数ファイル構成)
 ```
 
 `mikanassets/` 以下は server-bot-v3 が実際に読み込むディレクトリ構成と同じです。
@@ -226,20 +226,44 @@ config["discord_commands"]["permission"]["commands_level"]`)。
 
 ワールドのリージョンファイル(.mca)とプレイヤーの playerdata(.dat)を直接読み取り、
 画像として表示する拡張機能です。RCONやサーバーの標準出力に依存しない読み取り専用実装のため、
-サーバーが停止中でも動作します。
+サーバーが停止中でも動作します。単一の `commands.py` には収めず、責務ごとに `wv_*.py` へ
+分割しています(構成は `commands.py` 冒頭のdocstring「ファイル構成」節を参照)。
 
 - `/extension-world-visualizer map [dimension=overworld|nether|end]` — チャンクごとの
-  地表バイオーム+標高から簡易的な俯瞰マップ画像を1枚合成して返します。ブロック単位の質感までは
-  再現しない簡易版で、探索範囲が広い場合は自動的に間引いてサンプリングします(embedの
-  「サンプリング間隔」欄で確認できます)。
+  実ブロック色(草ブロック上面・葉・水などはバイオーム色で補正、それ以外は実テクスチャの
+  色そのまま。標高による陰影は無し)から、真上から見た俯瞰マップ画像を1枚合成して返します。
+  探索範囲が広い場合は自動的に間引いてサンプリングします(embedの「サンプリング間隔」欄で
+  確認できます)。
 - `/extension-world-visualizer inventory <player>` — `usercache.json` で名前からUUIDを引き、
   playerdataからメインインベントリ+ホットバーをグリッド画像として、防具/オフハンドをテキストで
   表示します。オフライン中のプレイヤーでも参照できます(直近のオートセーブ時点のデータです)。
+- `/extension-world-visualizer config [minecraft_version] [clear_cache]` — マップ描画に
+  使うMinecraftバージョンの手動指定/確認、ブロック色キャッシュのクリアを行います。
+  ローカルのファイル操作のみでネットワークにはアクセスしません。
 
 **前提**: 画像合成に [Pillow](https://pypi.org/project/Pillow/) が必要です(`pip install Pillow`)。
-未インストールの場合は両コマンドとも案内embedを返すだけで、他の拡張機能には影響しません。
+未インストールの場合は全コマンドとも案内embedを返すだけで、他の拡張機能には影響しません。
 
-チャンクデータ形式は 1.18 以降(sections直下・Heightmaps・セクション毎biomesパレット)を
-前提にしているため、1.17以前のワールドでは `map` が正しく描画できない場合があります
-(詳しい制約は `commands.py` 冒頭のdocstringを参照)。読み取り専用のため権限チェックは
+**配色の仕組み(知らないブロックが出てきた時だけAPIを叩く。叩く時は全部持ってくる)**:
+ブロックID→色の対応表を手作業で用意するとバージョンアップの度にメンテナンスが必要になる
+ため、Mojangが公式配布するクライアントjar(ランチャー自体が使うのと同じもの、無認証で
+ダウンロード可能)からブロックテクスチャの色を自動抽出します。ただしjar全体(数十MB)を
+毎回ダウンロードすることはせず、MojangのCDNが対応しているHTTP RangeリクエストでZIPの
+中央ディレクトリだけ取得してファイル一覧を把握します。ネットワークへは「まだ見たことが
+無いブロックに遭遇した時」だけアクセスしますが、一度アクセスする以上は中央ディレクトリの
+取得コストを払い済みなので、**その場でブロックテクスチャ全部(実測1268種類、約3.4MB・
+約19秒)をまとめて取得してキャッシュします**。一度取得しきったバージョンでは、以後
+`/map` を何度実行してもネットワークへ一切アクセスしません(バージョンをまたいで
+`block_color_cache/colors.json`〈gitignore対象〉へ永続キャッシュ)。ネットワーク不通/
+バージョン未検出の環境では解決できなかったブロックが灰色で表示されます(embedの
+「配色」欄で確認できます)。詳細な設計意図は `wv_blockcolors.py` 冒頭のdocstringを
+参照してください。
+
+Minecraftバージョンは、vanilla/Paper系サーバーが自動生成する `version_history.json` から
+自動検出します(見つからない場合は `/extension-world-visualizer config minecraft_version:<バージョン>`
+で手動指定してください)。
+
+チャンクデータ形式は 1.18 以降(sections直下・Heightmaps・セクション毎biomes/block_states
+パレット)を前提にしているため、1.17以前のワールドでは `map` が正しく描画できない場合が
+あります(詳しい制約は `wv_worldmap.py` 冒頭のdocstringを参照)。読み取り専用のため権限チェックは
 設けていません(`whitelist-ops-viewer` と同様)。

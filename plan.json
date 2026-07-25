@@ -110,6 +110,28 @@
       "notes": "review_pass_2026-07-24: 元々2案(backup-reminder: MERGE元, stale-backup-pruner: 共同開発者の新規提案)。ctx.backup_path のファイル名 (YYYY-MM-DD_HH_MM_SS-<name>) から日時を直接パースできるため『手動記録』は不要と判明し、完全自動化して統合した。"
     },
     {
+      "id": "scheduled-backup",
+      "name": "定期バックアップサイクル(停止→バックアップ→起動)",
+      "status": "implemented",
+      "category": "general",
+      "compatible_servers": ["any"],
+      "summary": "オーナー本人からのリクエストで追加。コアBotの /backup create はサーバー停止中でないと実行できない仕様のため、稼働中のサーバーを定期バックアップするには本来 停止→バックアップ→起動 を手動で順に実行する必要がある。server/control.py の start_server/stop_server と server/backup.py の create_backup (/start /stop /backup create と全く同じ実装) を直接呼び出し、append_task でこのサイクルを自動化する。",
+      "features": [
+        "/extension-scheduled-backup status — 現在の設定・次回予定・前回実行を表示",
+        "/extension-scheduled-backup show-config — /config の各引数名にそのまま対応する現在値を表示(誰でも実行可、変更はしない)",
+        "/extension-scheduled-backup run-now — スケジュールを待たず今すぐサイクルを実行(要上位権限)",
+        "/extension-scheduled-backup config — 有効/無効・間隔・バックアップ対象(server_path基準の相対パス)・Discord通知有無/通知先・サーバーへの事前警告(分数とコマンド)・停止待ちタイムアウト秒数・次回1回分の実行時刻(next_run_in_minutes)を設定(要上位権限)",
+        "append_task で毎分チェックし、間隔到達で自動実行。サーバーが既に停止中でもバックアップ自体は実行する(起動はしない、意図的な停止を尊重)"
+      ],
+      "permission_levels": {
+        "storage": "rcon拡張と同じく .config の discord_commands.permission.commands_level で管理(state.jsonではない)。オーナー本人から『コマンドの権限だけは.configで管理してほしい』という指定を受け、rconの _KNOWN_PERMISSIONS/_perm()/_register_missing_permission_keys() パターンをそのまま踏襲した。それ以外の設定(間隔・対象・通知・警告)はbackup-watch等と同じくstate.jsonに保存する(オーナー本人の指定)。",
+        "0 (既定)": ["extension-scheduled-backup status", "extension-scheduled-backup show-config"],
+        "2 (既定)": ["extension-scheduled-backup run-now", "extension-scheduled-backup config"]
+      },
+      "apis_used": ["append_task", "extension_commands_group", "server.control.start_server/stop_server", "server.backup.create_backup", "write_server_in", "core.path_utils.is_path_within_scope", "bot.client.client"],
+      "notes": "オーナー本人から『マイクラ以外にも使うので依存しない設計がいい』という指定を受け、restart-warning-timer とは異なり停止前警告のコマンド文字列(sayではなくstate.jsonのserver_warning_command)をハードコードせず任意文字列にし、既定は空文字列(送信しない)にした。同様に『プレイヤーがオンライン中でも実行するか』はRCONのプレイヤー数取得等ゲーム固有の仕組みに頼らず判定不要な設計にしている(オンライン人数によるスキップ判定はしない)。\n\nserver/control.pyのstart_server/stop_serverとserver/backup.pyのcreate_backupはDiscordコマンド層に依存しない純粋関数であることをコアBot本体のソース(bot/commands/server.py, bot/commands/backup.py)で確認した上で採用し、/stop実装と同じくstop_server()後にctx.server_process.is_stopped()を毎秒ポーリングして完了を待つパターンを踏襲した。\n\n(設計修正1: 停止中はスキップ→バックアップのみ実行へ) 初版は『サイクル開始時にサーバーが既に停止していたら起動せずスキップ(バックアップも行わない)』という設計だったが、オーナー本人から『バックアップ出来てよくないですか』と指摘を受けた。create_backupは単純なファイルコピーでサーバー状態を問わないため、停止中を理由にバックアップまで見送る理由が無いという指摘は妥当。停止させない/起動しない理由(管理者が意図的に停止している可能性)と、バックアップを行わない理由は別物と整理し、『停止中ならバックアップのみ実行し起動はしない』という設計に修正した(結果種別 skipped_not_running を廃止しbackup_only_was_stoppedへ置換)。\n\n(設計修正2: 変数名の曖昧さ) オーナー本人から『サーバーに送るメッセージなのかdiscordに送るのか判別できない変数名をやめてほしい』と指摘を受け、warning_command/warning_minutes_before を server_warning_command/server_warning_minutes_before にリネーム。ステータス埋め込みのフィールド名も『事前警告』→『サーバーへの事前警告(stdin)』、『Discord通知』→『Discordへの通知』に変更した。あわせて discord_channel_id が未設定のまま notify_discord を有効化した場合、/config を実行したチャンネルへ自動フォールバックする挙動(既存値がある場合は上書きしない)を追加した。/config の各引数に app_commands.describe で説明文も追加した。\n\n(設計修正3: 次回実行時刻の起点バグ) 初版は『起点が無いと計算が進まない』という技術的都合で、拡張がロードされた時刻を前回実行時刻(last_run_ts)としてダミー登録していた。この結果、enabledにするタイミングや前回のロード時刻によっては/statusで見た『次回予定』が既に過去の時刻になって表示される不具合があった。オーナー本人から『例えば5分を指定したら現在時刻+5が次回で、前回はまだないならnullになるはずでしょ』という指摘を受け、根本的に再設計: last_run_ts は一度も実行していなければ None のままとし(『前回実行: なし』と表示)、代わりに schedule_anchor_ts(enabled=trueにした時刻)を初回実行前専用の起点として分離した。次回予定は enabled にした瞬間は『今+interval』になる。あわせて first_run_at(絶対日時 or 時刻のみの文字列)で次回1回分の実行時刻を明示指定できる機能を追加(next_run_override_tsとして優先され、実行後は自動でクリアされ通常の間隔ベース計算に戻る)。\n\n実際にcore.state.ctx/discord.app_commands.Group等の実モジュールをロードした検証スクリプトで、権限キーの.configへの自動登録・書き戻し、スラッシュコマンドの型付き引数登録(リネーム後の引数名・説明文を含む)、サーバー停止中でもcreate_backupは呼ばれつつstop_server/start_serverは呼ばれない経路、稼働中はstop→backup→startの順で正しく呼ばれること、enabled:trueにした瞬間next_runが『今+interval』になること、discord_channel_idの自動フォールバック(既存値は上書きしない)を確認済み。\n\n(設計修正4: first_run_atをnext_run_in_minutes/last_backup_minutes_agoへ置換) first_run_at('2026-07-26 03:00'または'03:00'形式の文字列)を実装したところ、オーナー本人から『次回実行時刻の指定方法はもう少し考えてください。ゆーっざーに優しくありません』という指摘を受けた。Discordのスラッシュコマンドにはdatetime型の引数が無くstring型で正確な書式を打たせる必要があり、同じコマンド内の他の全パラメータ(interval_minutes/server_warning_minutes_before/stop_timeout_seconds)が『分』単位の整数であることと様式が揃っていなかったのが使いにくさの原因と判断し、first_run_atを廃止してnext_run_in_minutes(今から何分後か、整数)に置き換えた。日時パース関数(_parse_first_run_at)も不要になり削除。あわせて『プログラムが終了した場合にも前回のバックアップ時刻を指定できますか』という要望を受け、last_backup_minutes_ago(前回は何分前だったことにするか)を追加した。Botが長時間停止していた間に自動追跡が止まっていた場合や、拡張外(手動/backup create等)でバックアップした場合に、次回計算の起点を手動で補正できるようにするもの。\n\n(設計修正5: サイクル所要時間によるドリフトの修正) オーナー本人から『5分指定でも6分になり徐々にずれてしまいますがこれは修正済みですか』と指摘を受け、未修正のバグと判明した。初版はサイクル完了時に必ずlast_run_ts=datetime.now()(処理が全て終わった実時刻)を起点にしていたため、停止待ち+バックアップ+起動の所要時間がそのままインターバルに毎回上乗せされ、5分間隔のはずが実質6分間隔になり、それが繰り返されるため理想スケジュールから際限なくずれ続ける不具合があった。オーナー本人から『今日の10:00に実行された場合、10:06に実行されてもいいですがその次は10:09~10:11,10:14~10:16に収まってほしい』という具体的な期待値を提示されたため、これを満たすよう再設計: _run_cycleに『本来狙っていた理想スロット』(trigger_time、_cycle_loopが起動時に渡す)を渡すようにし、完了時は_next_anchor(trigger_time, interval, completion)というヘルパーで次回の起点を計算するよう変更した。理想グリッド(trigger_time, trigger_time+interval, trigger_time+2*interval, ...)上でcompletionより後になる直近のスロットを探し、その1つ前を返すことで、処理がinterval以内に終わる通常時は起点が全くずれず、長引いた場合のみ取りこぼした分のスロットを飛ばして次に到来する未来のスロットへ一気に合わせる(2回連続実行はしない)設計にした。/run-nowによる手動実行はtrigger_time=Noneのままとし、その時点(completion)を起点にリセットする(手動実行は元々厳密なグリッドに縛られる理由が無いため)。オーナー提示の具体例(10:00開始→10:06完了→次回10:10、続く10:10開始が通常時間内に完了→次回10:15)をそのままassertするテストで実際に一致することを確認済み。"
+    },
+    {
       "id": "downtime-notifier",
       "name": "予期しないダウン通知",
       "status": "implemented",

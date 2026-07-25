@@ -118,14 +118,13 @@
       "summary": "オーナー本人からのリクエストで追加。コアBotの /backup create はサーバー停止中でないと実行できない仕様のため、稼働中のサーバーを定期バックアップするには本来 停止→バックアップ→起動 を手動で順に実行する必要がある。server/control.py の start_server/stop_server と server/backup.py の create_backup (/start /stop /backup create と全く同じ実装) を直接呼び出し、append_task でこのサイクルを自動化する。",
       "features": [
         "/extension-scheduled-backup status — 現在の設定・次回予定・前回実行を表示",
-        "/extension-scheduled-backup show-config — /config の各引数名にそのまま対応する現在値を表示(誰でも実行可、変更はしない)",
         "/extension-scheduled-backup run-now — スケジュールを待たず今すぐサイクルを実行(要上位権限)",
         "/extension-scheduled-backup config — 有効/無効・間隔・バックアップ対象(server_path基準の相対パス)・Discord通知有無/通知先・サーバーへの事前警告(分数とコマンド)・停止待ちタイムアウト秒数・次回1回分の実行時刻(next_run_in_minutes)を設定(要上位権限)",
         "append_task で毎分チェックし、間隔到達で自動実行。サーバーが既に停止中でもバックアップ自体は実行する(起動はしない、意図的な停止を尊重)"
       ],
       "permission_levels": {
         "storage": "rcon拡張と同じく .config の discord_commands.permission.commands_level で管理(state.jsonではない)。オーナー本人から『コマンドの権限だけは.configで管理してほしい』という指定を受け、rconの _KNOWN_PERMISSIONS/_perm()/_register_missing_permission_keys() パターンをそのまま踏襲した。それ以外の設定(間隔・対象・通知・警告)はbackup-watch等と同じくstate.jsonに保存する(オーナー本人の指定)。",
-        "0 (既定)": ["extension-scheduled-backup status", "extension-scheduled-backup show-config"],
+        "0 (既定)": ["extension-scheduled-backup status"],
         "2 (既定)": ["extension-scheduled-backup run-now", "extension-scheduled-backup config"]
       },
       "apis_used": ["append_task", "extension_commands_group", "server.control.start_server/stop_server", "server.backup.create_backup", "write_server_in", "core.path_utils.is_path_within_scope", "bot.client.client"],

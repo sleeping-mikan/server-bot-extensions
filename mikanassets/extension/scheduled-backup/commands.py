@@ -33,7 +33,7 @@ interval 以内に終わった通常時は起点がずれず、長引いた場�
 discord_commands.permission.commands_level で管理する(rcon拡張と同じ方式)。
 それ以外の設定(間隔・対象・通知・警告)は他拡張と同じく state.json に保存する。
 
-登録される全コマンド: /extension-scheduled-backup <status|run-now|config|show-config>
+登録される全コマンド: /extension-scheduled-backup <status|run-now|config>
 """
 
 from __future__ import annotations
@@ -65,7 +65,6 @@ _KNOWN_PERMISSIONS: dict[str, int] = {
     "extension-scheduled-backup status": 0,
     "extension-scheduled-backup run-now": 2,
     "extension-scheduled-backup config": 2,
-    "extension-scheduled-backup show-config": 0,
 }
 
 _STATE_FILE = Path(__file__).parent / "state.json"
@@ -341,6 +340,7 @@ def _status_embed() -> ModifiedEmbeds.DefaultEmbed:
         value=("有効" + (f" (<#{_state['discord_channel_id']}>)" if _state["discord_channel_id"] else " (チャンネル未設定)")) if _state["notify_discord"] else "無効",
         inline=False,
     )
+    embed.add_field(name="停止待機秒数", value=f"{_state['stop_timeout_seconds']}秒", inline=True)
     return embed
 
 
@@ -349,30 +349,6 @@ async def status_command(interaction: discord.Interaction) -> None:
     if not await _check_permission(interaction, _perm("extension-scheduled-backup status")):
         return
     await interaction.response.send_message(embed=_status_embed())
-
-
-def _config_values_embed() -> ModifiedEmbeds.DefaultEmbed:
-    """_status_embed と同じ「日本語ラベル+フィールドを並べる」作法で、/config の各引数に
-    対応する現在値を表示する読み取り専用embed。ラベル文言も _status_embed と揃える
-    (有効/間隔/対象/Discordへの通知は _status_embed と同じ表記を使う)。
-    stop_timeout_seconds 等、_status_embed には出てこない項目も含め全項目を表示する。"""
-    embed = ModifiedEmbeds.DefaultEmbed(title="定期バックアップ設定 (config引数形式)")
-    embed.add_field(name="有効", value="はい" if _state["enabled"] else "いいえ", inline=True)
-    embed.add_field(name="間隔", value=f"{_state['interval_minutes']}分ごと", inline=True)
-    embed.add_field(name="対象", value=_state["target"] or "-", inline=True)
-    embed.add_field(name="Discordへの通知", value="有効" if _state["notify_discord"] else "無効", inline=True)
-    embed.add_field(name="通知先チャンネル", value=f"<#{_state['discord_channel_id']}>" if _state["discord_channel_id"] else "-", inline=True)
-    embed.add_field(name="事前警告(何分前)", value=f"{_state['server_warning_minutes_before']}分前", inline=True)
-    embed.add_field(name="事前警告コマンド(stdin)", value=_state["server_warning_command"] or "-", inline=True)
-    embed.add_field(name="停止待機秒数", value=f"{_state['stop_timeout_seconds']}秒", inline=True)
-    return embed
-
-
-@tree.command(name="show-config", description="現在の設定値を/configと同じ項目名でそのまま表示する(変更は行わない)")
-async def show_config_command(interaction: discord.Interaction) -> None:
-    if not await _check_permission(interaction, _perm("extension-scheduled-backup show-config")):
-        return
-    await interaction.response.send_message(embed=_config_values_embed())
 
 
 def _make_progress_callback(interaction: discord.Interaction, embed: ModifiedEmbeds.DefaultEmbed) -> ProgressCallback:

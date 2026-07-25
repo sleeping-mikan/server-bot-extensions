@@ -435,3 +435,7 @@ Discord側の設定)。無効なままだと、サーバー→Discordは動作�
   サーバーログ判定パターン・Discord表示書式・サーバー送信コマンド書式を設定
   (要上位権限)。`enabled` を `true` にする際、中継先チャンネル未設定なら実行チャンネルへ
   自動的にフォールバックします(`scheduled-backup` と同様)。
+
+権限レベルは `rcon` / `scheduled-backup` / `update-watch` と同じく `state.json` ではなく
+`.config` の `discord_commands.permission.commands_level` で管理します(`status` / `test` は
+既定0、`config` は既定1)。

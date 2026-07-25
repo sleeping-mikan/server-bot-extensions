@@ -105,6 +105,22 @@ Intent が必要。bot/client.py で `intents.message_content = True` は既に�
 オンにすることだけ(こちらはコードでは有効化できない)。無効な場合、サーバー→Discordは動作するが
 Discord→サーバーの発言内容が常に空になり中継されない。
 
+## 権限レベル
+
+rcon / scheduled-backup / update-watch と同じく、各コマンドの要求権限レベルは state.json では
+なく **.config** の discord_commands.permission.commands_level に
+"extension-chat-bridge <サブコマンド名>": <レベル> というキーで管理する。キー名は実際の
+スラッシュコマンド名(/extension-chat-bridge config 等)とそのまま一致させている。デフォルト値は
+_KNOWN_PERMISSIONS にまとめてあり、拡張ロード時に .config にまだ無いキーがあれば自動的にこの
+デフォルト値で書き足し、その場で .config ファイルへ即座に反映する(詳細は
+_register_missing_permission_keys() / _perm() を参照)。つまり管理者は .config を開けば
+"extension-chat-bridge config" 等のキーが既に存在した状態になっており、値を書き換えるだけでよい
+(何もしなければデフォルトのまま動く)。
+
+    extension-chat-bridge status   0
+    extension-chat-bridge test     0
+    extension-chat-bridge config   1
+
 登録される全コマンド: /extension-chat-bridge <config|status|test>
 """
 
@@ -122,7 +138,7 @@ from discord.ext import tasks
 from bot.client import client
 from bot.embeds import ModifiedEmbeds
 from bot.extensions import append_task, write_server_in
-from bot.utils import not_enough_permission, print_user, user_permission
+from bot.utils import not_enough_permission, print_user, rewrite_config, user_permission
 from core.log_setup import LogManager
 from core.log_tailer import LogTailer, LogTailerEmptyError
 from core.state import ctx
@@ -131,7 +147,15 @@ from core.state import ctx
 tree = ctx.extension_commands_group
 logger = ctx.extension_logger
 
-REQUIRED_LEVEL = 1
+# chat-bridge の各コマンドが要求する権限レベルのデフォルト値(唯一の定義元)。
+# state.json ではなく .config の discord_commands.permission.commands_level 側で管理する
+# (rcon / scheduled-backup / update-watch と同じ方式)。.config に同名キーが無ければ
+# ここに登録し、そのままファイルへも書き戻す(_register_missing_permission_keys 参照)。
+_KNOWN_PERMISSIONS: dict[str, int] = {
+    "extension-chat-bridge status": 0,
+    "extension-chat-bridge test": 0,
+    "extension-chat-bridge config": 1,
+}
 
 _STATE_FILE = Path(__file__).parent / "state.json"
 _LOG_TICK_SECONDS = 2
@@ -355,9 +379,37 @@ async def _discord_poll_loop() -> None:
 append_task(_discord_poll_loop)
 
 
-async def _check_permission(interaction: discord.Interaction) -> bool:
+def _register_missing_permission_keys() -> None:
+    """.config に無い chat-bridge の権限キーを _KNOWN_PERMISSIONS の値で登録し、即座に .config へ書き戻す。
+
+    rcon 拡張と同じ理由・同じ仕組み: コアBotの起動時補完(core/config_loader.py)は
+    コア本体の command_desc に登録されたコマンドしか対象にしないため、拡張機能側の
+    キーはここで自前で ctx.text.command_permission(= .config の commands_level と
+    同一のdict)へ補完する。拡張のロードは main.py の同期的な起動フェーズ内で行われ、
+    この時点でDiscordのイベントループはまだ動いていないため、async def だが中身は
+    同期的なファイル書き込みでしかない rewrite_config() を asyncio.run() で問題なく呼べる。
+    """
+    added = False
+    for key, default in _KNOWN_PERMISSIONS.items():
+        if key not in ctx.text.command_permission:
+            ctx.text.command_permission[key] = default
+            added = True
+    if added:
+        logger.info("registered missing chat-bridge permission keys, writing to .config")
+        asyncio.run(rewrite_config())
+
+
+_register_missing_permission_keys()
+
+
+def _perm(key: str) -> int:
+    """コマンドごとの要求権限レベルを .config から読む(未登録キーは有り得ない前提)。"""
+    return ctx.text.command_permission.get(key, _KNOWN_PERMISSIONS[key])
+
+
+async def _check_permission(interaction: discord.Interaction, required: int) -> bool:
     await print_user(logger, interaction.user)
-    if await user_permission(interaction.user) < REQUIRED_LEVEL:
+    if await user_permission(interaction.user) < required:
         await not_enough_permission(interaction, logger)
         return False
     return True
@@ -365,6 +417,9 @@ async def _check_permission(interaction: discord.Interaction) -> bool:
 
 @tree.command(name="status", description="chat-bridge の現在の設定と稼働状況を表示する")
 async def status_command(interaction: discord.Interaction) -> None:
+    if not await _check_permission(interaction, _perm("extension-chat-bridge status")):
+        return
+
     buffered = len(LogManager.snapshot_log_msg())
     target_channels = list(_iter_target_channels()) if _state["enabled"] else []
     guild_count = len({c.guild.id for c in target_channels})
@@ -386,11 +441,15 @@ async def status_command(interaction: discord.Interaction) -> None:
     embed.add_field(name="サーバーログ判定パターン", value=f"`{_state['game_log_pattern']}`", inline=False)
     embed.add_field(name="Discord表示書式", value=f"`{_state['discord_message_format']}`", inline=False)
     embed.add_field(name="サーバー送信コマンド書式", value=f"`{_state['game_command_format']}`", inline=False)
+    embed.set_footer(text="権限レベルは .config の discord_commands.permission.commands_level で設定してください")
     await interaction.response.send_message(embed=embed)
 
 
 @tree.command(name="test", description="サーバーログ判定パターンをサンプル行に対して試す")
 async def test_command(interaction: discord.Interaction, sample_line: str) -> None:
+    if not await _check_permission(interaction, _perm("extension-chat-bridge test")):
+        return
+
     pattern = _compile_chat_pattern(_state["game_log_pattern"])
     if pattern is None:
         embed = ModifiedEmbeds.ErrorEmbed(
@@ -440,7 +499,7 @@ async def config_command(
     game_command_format: str | None = None,
     server_display_name: str | None = None,
 ) -> None:
-    if not await _check_permission(interaction):
+    if not await _check_permission(interaction, _perm("extension-chat-bridge config")):
         return
 
     if game_log_pattern is not None:

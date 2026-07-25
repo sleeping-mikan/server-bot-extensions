@@ -9,7 +9,9 @@
 自体が使うのと同じ公式配布物)を情報源にしつつ、**jar全体(数十MB)を毎回ダウンロードする
 ことはしない**。JARはZIP形式であり、MojangのCDNはHTTP Rangeリクエストに対応しているため、
 `zipfile.ZipFile` にRangeリクエストで範囲だけ取ってくるファイル様オブジェクト
-(`_HTTPRangeFile`)を渡すことで、jar全体をダウンロードせずに済む。
+(`wv_mojangjar.HTTPRangeFile`)を渡すことで、jar全体をダウンロードせずに済む。
+jar取得まわりの共通処理は `wv_itemtextures.py`(アイテムアイコン取得)と共有するため
+`wv_mojangjar.py` に切り出してある。
 
 ネットワークへは「まだ見たことが無いブロックに遭遇した時」だけアクセスする。ただし
 一度アクセスする以上、ZIPの中央ディレクトリ(ファイル一覧)は既に取得済みなので、
@@ -21,7 +23,7 @@ HTTP接続はkeep-aliveで使い回す(`http.client.HTTPSConnection`を1個の�
 毎に使い捨てず持続させる)ことで、大量の小さいRangeリクエストでも高速に処理できる。
 
 取得した色は既知のブロック(テクスチャ名)についてはバージョンをまたいで永続キャッシュ
-(`block_color_cache/colors.json`)に貯め続けるため、一度取得しきったバージョンでは
+(`cache/block_colors/colors.json`)に貯め続けるため、一度取得しきったバージョンでは
 以後 `/map` を何度実行してもネットワークへ一切アクセスしない(テクスチャの基本色が
 version間で変わることは稀なので、多少古いバージョンで解決した色を使い回しても実用上
 問題にならない、という判断)。存在しないテクスチャ名(対応表のヒューリスティックが
@@ -48,27 +50,24 @@ BIOME_TINTED_BLOCKSに該当するブロックに限定して復元した。
 
 from __future__ import annotations
 
-import http.client
+import gzip
 import io
 import json
-import urllib.request
-import zipfile
 from pathlib import Path
-from urllib.parse import urlsplit
 
 from core.state import ctx
 
+import wv_mojangjar
+import wv_serverfiles
 from wv_imaging import Image
+from wv_nbt import NBTReader
 
 logger = ctx.extension_logger
 
-VERSION_MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
-HTTP_TIMEOUT = 30.0
-HTTP_HEADERS = {"User-Agent": "server-bot-extensions-pack/world-visualizer"}
-
-_CACHE_DIR = Path(__file__).parent / "block_color_cache"
+# __file__ は lib/wv_blockcolors.py なので、拡張ルート直下の cache/ を指すには1階層上がる
+# (コードとキャッシュ/生成物を分離するため、キャッシュは lib/ の外に置く)。
+_CACHE_DIR = Path(__file__).resolve().parent.parent / "cache" / "block_colors"
 _COLORS_FILE = _CACHE_DIR / "colors.json"
-_JAR_URLS_FILE = _CACHE_DIR / "jar_urls.json"
 
 # ブロック名(minecraft:接頭辞を除いたもの)からテクスチャファイル名が単純一致しない
 # もの、または上面(このマップは真上から見た図なので上面のテクスチャが欲しい)を
@@ -101,136 +100,57 @@ BIOME_TINTED_BLOCKS: set[str] = {
 
 # ── Mojang版マニフェストからバージョン検出/jar URL解決(結果はキャッシュする) ──────
 
+def _detect_version_from_level_dat() -> str | None:
+    """ワールドの `<level-name>/level.dat`(gzip圧縮NBT)から Data.Version.Name を読む。
+    これは/mapが読みに行くワールドセーブ自体が持つ「実際に最後に保存された時点の
+    バージョン」情報であり、ワールドが1回でも保存されていれば(=/mapがそもそも
+    動作する前提として)必ず存在する。version_history.json はサーバーの構成によっては
+    生成されない場合がある(実機検証で、起動・プレイ済みの vanilla サーバーでも
+    version_history.json が存在しないケースを確認済み)ため、こちらを優先する。"""
+    path = ctx.server_path / wv_serverfiles.level_name() / "level.dat"
+    if not path.exists():
+        return None
+    try:
+        with path.open("rb") as f:
+            data = gzip.decompress(f.read())
+        root = NBTReader(data).read_root()
+        version = root.get("Data", {}).get("Version", {}).get("Name")
+        return str(version) if version else None
+    except Exception as e:
+        logger.error(f"failed to read level.dat version ({e})")
+        return None
+
+
 def detect_minecraft_version(state: dict) -> str | None:
     """マップ描画に使うMinecraftバージョン文字列を決める。ネットワークは使わない。
 
     1. state.json に手動設定(/extension-world-visualizer config)があればそれを最優先する。
-    2. 無ければ、vanilla/Paper系サーバーが起動時に自動生成する version_history.json の
-       currentVersion を読む(RCON等を使わずファイルだけで済む唯一の自動検出手段)。
-    3. どちらも無ければ None(呼び出し側でブロック色取得を諦める)。
+    2. 無ければ world/level.dat の Data.Version.Name を読む(最も信頼できる自動検出手段、
+       詳細は _detect_version_from_level_dat 参照)。
+    3. それも読めなければ version_history.json の currentVersion を試す(生成される
+       サーバー構成であれば有効な補助手段)。
+    4. いずれも無ければ None(呼び出し側でブロック色取得を諦める)。
     """
     manual = state.get("minecraft_version")
     if manual:
         return str(manual)
+
+    from_level_dat = _detect_version_from_level_dat()
+    if from_level_dat:
+        return from_level_dat
+
     path = ctx.server_path / "version_history.json"
-    if not path.exists():
-        return None
-    try:
-        with path.open("r", encoding="utf-8") as f:
-            data = json.load(f)
-        version = data.get("currentVersion")
-        return str(version) if version else None
-    except Exception as e:
-        logger.error(f"failed to read version_history.json ({e})")
-        return None
+    if path.exists():
+        try:
+            with path.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+            version = data.get("currentVersion")
+            if version:
+                return str(version)
+        except Exception as e:
+            logger.error(f"failed to read version_history.json ({e})")
 
-
-def _http_get_json(url: str) -> dict:
-    req = urllib.request.Request(url, headers=HTTP_HEADERS)
-    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
-        return json.loads(resp.read().decode("utf-8"))
-
-
-def _load_jar_url_cache() -> dict[str, str]:
-    if not _JAR_URLS_FILE.exists():
-        return {}
-    try:
-        with _JAR_URLS_FILE.open("r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as e:
-        logger.error(f"failed to read jar url cache ({e})")
-        return {}
-
-
-def _save_jar_url_cache(cache: dict[str, str]) -> None:
-    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    with _JAR_URLS_FILE.open("w", encoding="utf-8") as f:
-        json.dump(cache, f)
-
-
-def get_client_jar_url(version: str) -> str:
-    """指定バージョンのクライアントjar URLを返す。一度解決したらローカルへ永続キャッシュし、
-    以後同じバージョンではMojangのバージョンマニフェストへ再アクセスしない。"""
-    cached = _load_jar_url_cache()
-    if version in cached:
-        return cached[version]
-
-    manifest = _http_get_json(VERSION_MANIFEST_URL)
-    entry = next((v for v in manifest.get("versions", []) if v.get("id") == version), None)
-    if entry is None:
-        raise ValueError(f"Minecraft version {version!r} not found in Mojang's version manifest")
-    version_meta = _http_get_json(entry["url"])
-    client_url = version_meta["downloads"]["client"]["url"]
-
-    cached[version] = client_url
-    _save_jar_url_cache(cached)
-    return client_url
-
-
-# ── HTTP Rangeリクエストだけでzipfile.ZipFileを読ませるためのファイル様オブジェクト ──
-# ブロックテクスチャを一括取得する都合上、数百〜千件超のRangeリクエストを連続で
-# 発行するため、リクエスト毎に新規接続を張る urllib.request ではなく
-# http.client の持続接続(keep-alive)を使い回して高速化する
-# (実測: 1269テクスチャを新規接続無しの持続接続で約18秒・約3.4MBで取得できた)。
-
-class _HTTPRangeFile:
-    """zipfile.ZipFile が要求した範囲だけをHTTP Rangeリクエストで都度取得する。
-    central directory(ファイル一覧、バージョン毎に1回)と、実際にopen()した個々の
-    エントリの圧縮データだけがネットワーク越しに転送され、jar全体は取得しない。"""
-
-    def __init__(self, url: str) -> None:
-        parts = urlsplit(url)
-        self._path = parts.path + (f"?{parts.query}" if parts.query else "")
-        conn_cls = http.client.HTTPSConnection if parts.scheme == "https" else http.client.HTTPConnection
-        self._conn = conn_cls(parts.hostname, parts.port, timeout=HTTP_TIMEOUT)
-        self._pos = 0
-        self._size = self._fetch_range(0, 0)[0]
-
-    def _fetch_range(self, start: int, end: int) -> tuple[int, bytes]:
-        headers = {**HTTP_HEADERS, "Range": f"bytes={start}-{end}"}
-        self._conn.request("GET", self._path, headers=headers)
-        resp = self._conn.getresponse()
-        data = resp.read()
-        if resp.status not in (200, 206):
-            raise ValueError(f"unexpected HTTP status {resp.status} for ranged request to {self._path}")
-        content_range = resp.getheader("Content-Range")
-        if not content_range:
-            raise ValueError(f"server did not respond with Content-Range for {self._path} (Range requests unsupported?)")
-        total = int(content_range.split("/")[-1])
-        return total, data
-
-    def seekable(self) -> bool:
-        return True
-
-    def tell(self) -> int:
-        return self._pos
-
-    def seek(self, offset: int, whence: int = 0) -> int:
-        if whence == 0:
-            self._pos = offset
-        elif whence == 1:
-            self._pos += offset
-        elif whence == 2:
-            self._pos = self._size + offset
-        else:
-            raise ValueError(f"unsupported whence: {whence}")
-        return self._pos
-
-    def read(self, n: int = -1) -> bytes:
-        if n is None or n < 0:
-            end = self._size - 1
-        elif n == 0:
-            return b""
-        else:
-            end = min(self._pos + n - 1, self._size - 1)
-        if self._pos > end or self._pos >= self._size:
-            return b""
-        _, data = self._fetch_range(self._pos, end)
-        self._pos += len(data)
-        return data
-
-    def close(self) -> None:
-        self._conn.close()
+    return None
 
 
 def _average_texture_color(image: "Image.Image") -> tuple[int, int, int] | None:
@@ -279,8 +199,9 @@ def save_color_cache(cache: dict) -> None:
 def clear_color_cache() -> None:
     if _COLORS_FILE.exists():
         _COLORS_FILE.unlink()
-    if _JAR_URLS_FILE.exists():
-        _JAR_URLS_FILE.unlink()
+    jar_urls_file = _CACHE_DIR / "jar_urls.json"
+    if jar_urls_file.exists():
+        jar_urls_file.unlink()
 
 
 def resolve_unknown_textures(version: str, texture_keys: set[str], cache: dict) -> None:
@@ -301,9 +222,7 @@ def resolve_unknown_textures(version: str, texture_keys: set[str], cache: dict) 
         return
 
     try:
-        jar_url = get_client_jar_url(version)
-        remote = _HTTPRangeFile(jar_url)
-        zf = zipfile.ZipFile(remote)
+        zf, remote = wv_mojangjar.open_remote_jar(version, _CACHE_DIR)
     except Exception as e:
         logger.error(f"failed to open remote client jar for {version} ({e})")
         return  # ネットワーク/バージョン解決の失敗はmissing扱いにしない(一時的な失敗の可能性があるため)

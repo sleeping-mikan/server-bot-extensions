@@ -14,6 +14,7 @@ mikanassets/
     restart-warning-timer/commands.py        ← 再起動予告タイマー
     disk-space-watchdog/commands.py          ← ディスク容量監視
     backup-watch/commands.py                 ← バックアップ未実施リマインド + 自動整理
+    scheduled-backup/commands.py             ← 定期的な停止→バックアップ→起動サイクル
     downtime-notifier/commands.py            ← 予期しないダウン通知
     rcon/commands.py                         ← RCON経由コマンド実行(確実な結果取得 + エイリアス多数)
     world-visualizer/                        ← ワールド全体マップ画像 + プレイヤー所持品画像(複数ファイル構成)
@@ -104,6 +105,46 @@ server-bot-v3 を配置しているディレクトリの `mikanassets/extension/
 - `/extension-backup-watch last`
 - `/extension-backup-watch prune-now`(要上位権限)
 - `/extension-backup-watch config [remind_after_hours] [retention_days] [auto_prune] [channel]`
+
+### scheduled-backup
+
+コアBotの `/backup create` はサーバーが停止中でないと実行できない仕様のため、稼働中のサーバーを
+定期的にバックアップするには本来「停止 → バックアップ → 起動」を手動で順番に実行する必要があります。
+この拡張は `server/control.py` の `start_server` / `stop_server` と `server/backup.py` の
+`create_backup`(いずれも `/start` `/stop` `/backup create` と同じ実装)を直接呼び出し、このサイクルを
+`append_task` で定期的に自動実行します。サイクル実行時にサーバーが既に停止していた場合は、
+**バックアップ自体は変わらず実行します**(`create_backup` はファイルコピーするだけでサーバー状態を
+問わないため)。ただし起動は行いません(管理者が意図的に停止している可能性があるため、拡張側から
+無条件に起動はしない)。
+
+サーバーへの警告コマンド(`server_warning_command` / `server_warning_minutes_before`)とDiscordへの通知
+(`notify_discord` / `discord_channel_id`)は名前で明確に区別しています。Minecraft専用の "say" 等は
+ハードコードしておらず、`server_warning_command` は任意のstdinコマンド文字列を`config`で設定できます
+(既定は空文字列 = 送信しない)。`discord_channel_id` が未設定のまま `notify_discord` を有効化した場合は、
+`/config` を実行したチャンネルへ自動的にフォールバックします(既に設定済みのチャンネルは上書きしません)。
+
+初回実行前の「次回予定」は `enabled` を `true` にした時刻を起点に `interval_minutes` 後として計算します
+(一度も実行していない間は「前回実行: なし」と表示されます)。`next_run_in_minutes`(今から何分後か)
+で次回1回分の実行時刻を明示指定でき、実行後は自動で通常の間隔ベースの計算に戻ります。日時文字列を
+正確に入力させる方式は使いにくいため、他のパラメータ(`interval_minutes`等)と同じ「分数」ベースの
+指定に統一しています。Botが停止していた間や拡張外でバックアップした場合に前回時刻を補正したい場合は
+`last_backup_minutes_ago`(前回は何分前だったことにするか)で直接指定できます。
+
+次回実行時刻は「サイクルが完了した時刻」ではなく「本来狙っていた理想スロット」を起点に計算するため、
+バックアップの所要時間がそのままインターバルに上乗ってずれ続けることはありません(例: 5分間隔で
+1回のバックアップが6分かかっても、次のスロットは6分後ではなく直近の未来のスロット=10分後に
+飛びます。処理がinterval以内に終わる通常時は起点が全くずれません)。
+
+- `/extension-scheduled-backup status` — 現在の設定・次回予定・前回実行を表示
+- `/extension-scheduled-backup run-now` — スケジュールを待たず今すぐサイクルを実行(要上位権限)
+- `/extension-scheduled-backup config` — 有効/無効・間隔・バックアップ対象(`server_path`基準の相対パス)・
+  Discord通知有無/通知先チャンネル・サーバーへの事前警告(分数とコマンド)・停止待ちタイムアウト秒数・
+  次回1回分の実行時刻(`next_run_in_minutes`)・前回バックアップ時刻の補正(`last_backup_minutes_ago`)
+  を設定(要上位権限)
+
+権限レベルは `rcon` 拡張と同じく `state.json` ではなく `.config` の
+`discord_commands.permission.commands_level` で管理します(`extension-scheduled-backup status` は既定0、
+`run-now` / `config` は既定2)。それ以外の設定(間隔・対象・通知・警告)は他拡張と同じく `state.json` に保存します。
 
 ### downtime-notifier
 
@@ -259,9 +300,11 @@ config["discord_commands"]["permission"]["commands_level"]`)。
 「配色」欄で確認できます)。詳細な設計意図は `wv_blockcolors.py` 冒頭のdocstringを
 参照してください。
 
-Minecraftバージョンは、vanilla/Paper系サーバーが自動生成する `version_history.json` から
-自動検出します(見つからない場合は `/extension-world-visualizer config minecraft_version:<バージョン>`
-で手動指定してください)。
+Minecraftバージョンは、ワールドの `<level-name>/level.dat` (NBTのData.Version.Name)から
+自動検出します(ワールドが1回でも保存されていれば必ず存在するため、この方式を優先しています。
+`version_history.json` はサーバー構成によっては生成されないことがあるため補助的な手段として
+残しています)。どちらも取得できない場合は `/extension-world-visualizer config minecraft_version:<バージョン>`
+で手動指定してください。
 
 チャンクデータ形式は 1.18 以降(sections直下・Heightmaps・セクション毎biomes/block_states
 パレット)を前提にしているため、1.17以前のワールドでは `map` が正しく描画できない場合が

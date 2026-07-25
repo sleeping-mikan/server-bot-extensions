@@ -5,6 +5,7 @@ __pycache__/
 # 各拡張機能が初回実行時に自動生成するランタイム設定(配布物には含めない)
 mikanassets/extension/*/state.json
 
-# world-visualizer が Mojang のクライアントjarから取得したブロック色を貯めるキャッシュ
-# (環境固有の生成物であり、初回実行時に自動生成されるため配布物には含めない)
-mikanassets/extension/world-visualizer/block_color_cache/
+# world-visualizer が Mojang のクライアントjarから取得したブロック色/アイテムアイコンを
+# 貯めるキャッシュ(環境固有の生成物であり、初回実行時に自動生成されるため配布物には含めない。
+# コード(lib/)とは分離してある)
+mikanassets/extension/world-visualizer/cache/

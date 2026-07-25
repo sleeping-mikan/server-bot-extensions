@@ -1,4 +1,10 @@
-"""wv_inventoryimage — プレイヤー所持アイテムのグリッド画像を合成する(Pillow使用)。"""
+"""wv_inventoryimage — プレイヤー所持アイテムのグリッド画像を合成する(Pillow使用)。
+
+`icons`(wv_itemtextures から取得したアイテムID→アイコン画像の辞書)を渡すと、実テクスチャを
+セルへ拡大縮小無しの最近傍補間(`Image.NEAREST`)で貼り付け、ドット絵のまま見えるようにする
+(Minecraft本体もGUIでこの補間方式を使っているため、リニア補間だとぼやけて見た目が崩れる)。
+アイコンが解決できなかったアイテムは、従来通りアイテムIDから決定するハッシュ色の矩形+
+折り返しテキストラベルにフォールバックする。"""
 
 from __future__ import annotations
 
@@ -42,7 +48,8 @@ def _draw_wrapped_label(draw, text: str, x: int, y: int, max_width: int, font, m
         draw.text((x, y + i * 10), line, font=font, fill=(255, 255, 255))
 
 
-def build_inventory_image(items: list[dict]) -> bytes:
+def build_inventory_image(items: list[dict], icons: dict[str, "Image.Image"] | None = None) -> bytes:
+    icons = icons or {}
     by_slot = {item["slot"]: item for item in items}
     img_w = GRID_COLS * CELL + PADDING * 2
     img_h = GRID_ROWS * CELL + PADDING * 2 + HOTBAR_GAP
@@ -61,9 +68,16 @@ def build_inventory_image(items: list[dict]) -> bytes:
             draw.rectangle([x0, y0, x1, y1], outline=(70, 70, 76), width=1)
             continue
 
-        draw.rectangle([x0, y0, x1, y1], fill=item_color(item["id"]), outline=(20, 20, 22), width=1)
-        label = item["id"].split(":", 1)[-1].replace("_", " ")
-        _draw_wrapped_label(draw, label, x0 + 3, y0 + 3, CELL - 6, font)
+        icon = icons.get(item["id"])
+        draw.rectangle([x0, y0, x1, y1], fill=(45, 45, 50), outline=(20, 20, 22), width=1)
+        if icon is not None:
+            inner = CELL - 8
+            resized = icon.resize((inner, inner), Image.NEAREST)
+            img.paste(resized, (x0 + 4, y0 + 4), resized)
+        else:
+            draw.rectangle([x0, y0, x1, y1], fill=item_color(item["id"]), outline=(20, 20, 22), width=1)
+            label = item["id"].split(":", 1)[-1].replace("_", " ")
+            _draw_wrapped_label(draw, label, x0 + 3, y0 + 3, CELL - 6, font)
         if item["count"] > 1:
             count_text = str(item["count"])
             tw = draw.textlength(count_text, font=font)

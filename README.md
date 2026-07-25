@@ -19,6 +19,7 @@ mikanassets/
     rcon/commands.py                         ← RCON経由コマンド実行(確実な結果取得 + エイリアス多数)
     world-visualizer/                        ← ワールド全体マップ画像 + プレイヤー所持品画像(複数ファイル構成)
     update-watch/commands.py                 ← バージョン更新監視 + 半自動アップデート
+    chat-bridge/commands.py                  ← サーバー内チャット⇔Discordチャット相互中継
 ```
 
 `mikanassets/` 以下は server-bot-v3 が実際に読み込むディレクトリ構成と同じです。
@@ -345,3 +346,92 @@ jar差し替え→起動)作業が手間で後回しになっている」とい�
 権限レベルは `rcon` / `scheduled-backup` と同じく `state.json` ではなく `.config` の
 `discord_commands.permission.commands_level` で管理します(`status` / `check-now` は既定0、
 `apply` / `config` は既定2)。
+
+### chat-bridge
+
+サーバー内のチャットとDiscordのチャットを相互に中継します。**Minecraft専用ではありません**
+(disk-space-watchdog や auto-announce と同じく `category: general`)。サーバー内チャットが
+テキストのログとして出力され、コンソール入力でチャット送信できるサーバーであれば、
+検出パターン・送信コマンドを `config` で設定するだけでゲームを問わず使えます。以下で示す
+ログ判定パターン(Log4j2形式の正規表現)や `say` コマンドはあくまで「利用者が多いであろう
+バニラMinecraftを例にした既定値」であり、コード側にMinecraft固有の処理はハードコードして
+いません。他のゲームサーバーで使う場合は、そのサーバーのログ形式とチャット送信コマンドに
+合わせて `config` で書き換えてください。
+
+- **サーバー→Discord**: server-bot-v3 が拡張機能向けに提供している `core.log_tailer.LogTailer`
+  (`async for line in tailer:` で新規行を待ち続ける非同期イテレータ)を、既定のソースのまま
+  使います。ソースは `LogManager.snapshot_log_msg()` — bot/sys/server/cmd 等**全ロガーが混ざった**
+  直近100件の共有バッファで、サーバーの標準出力も server ロガー経由で常にここに流れ込みます
+  (`server/stdout.py` の `server_log.info(line)` をソースで確認済み。ファイルへも書き出すか
+  どうかを決める `.config` の `log.server` フラグには一切左右されず常に実行されるため、
+  「ログが存在しない」という状態がほぼ起こりません)。このバッファは表示用にANSIカラーコード
+  (`\033[...m`)付きの文字列になっていますが、これは無視せず単純に正規表現で取り除いてから
+  チャット検出に使っています(`core/log_setup.py` の `ServerConsoleFormatter` 等をソースで確認し、
+  実際に `LogManager` へ本物のログ行を書き込ませて ANSI除去+正規表現の一連の処理が
+  日本語チャットも含めて正しく動くことをテスト済み)。他ロガーの行(bot起動メッセージ・
+  コマンド実行ログ等)も同じバッファに混ざりますが、`game_log_pattern` は「サーバーのログ行に
+  現れる特定の並び」だけを `search()` で拾うため実害はありません。この設計により、以前の実装
+  (`ctx.server_path/logs/` 配下のセッションログファイルを直接globで探す方式)が抱えていた
+  「`.config` の `log.server` を有効にしておく必要がある」「非公開のファイル名パターンに依存する」
+  という2つの制約を両方解消しています。代わりに、共有バッファが全ロガー合算で`maxlen=100`件しか
+  無いという制約を受け入れています(個人〜身内数人規模のサーバー運用ならこの上限に達することは
+  通常ありません)。
+  `async for` は開始した瞬間にその時点でバッファに既にある内容を丸ごと最初のバッチとして
+  返すため、拡張を有効化した直後に既存内容を一括でDiscordへ流さないよう、開始時点の最後の行が
+  来るまでは処理をスキップしています。マッチした行は `game_log_pattern`(正規表現。`{name}` と
+  `{chat}` というプレースホルダを埋め込む)に照合し、マッチした部分を `{name}`/`{chat}` の
+  名前付きキャプチャとして抽出します。既定値はバニラMinecraft(Log4j2)の
+  `<プレイヤー名> 発言内容` 形式を例にした
+  `\[\d{2}:\d{2}:\d{2}\] \[Server thread/INFO\]: <{name}> {chat}`。マッチした発言は
+  `discord_message_format`(プレースホルダ `{server}` `{channel}` `{name}` `{chat}` が使える。
+  既定値はシンプルな `<{name}> {chat}`。送信先は `discord_channel` 1個に固定されており発言元は
+  常に単一のサーバーなので、下記の `game_command_format` のような発言元の区別は既定では不要という
+  判断)で整形してDiscordチャンネルへ送信します。
+- **Discord→サーバー**: **サーバー→Discordとは非対称の設計です。** サーバー→Discordの送信先は
+  `discord_channel` で指定する単一チャンネルですが、Discord→サーバーは特定チャンネルに絞らず
+  **bot が参加している全てのDiscordサーバー(ギルド)の全テキストチャンネル**を対象にします
+  (`channel.permissions_for(guild.me)` で読み取り権限があるチャンネルのみ)。複数チャンネル・
+  複数Discordサーバーから発言が混ざって届くため、`game_command_format` の既定値は `{server}`
+  (発言があったDiscordサーバー名、`message.guild.name`)から始まる書式にしてあり、サーバー内で
+  どこからの発言か分かるようにしています(既定値 `say {server} #{channel} ✧ <{name}> {chat}`)。
+  `on_message` イベントは使いません。`discord.Client`(server-bot-v3の `bot/client.py` で
+  `discord.Client(intents=...)` として生成されており、`commands.Bot` ではないことをソースで
+  確認済み)には拡張機能から追加のイベントリスナーを登録する `add_listener` が存在せず、
+  コアBotは `bot/events.py` で `@client.event async def on_message` を既にモジュールロード時に
+  登録して `/terminal set` のターミナルチャンネル機能を実装しているため、拡張側で
+  `client.on_message` を上書きするとその機能を壊します。代わりに `append_task` のループ
+  (3秒間隔)で対象チャンネルごとに `channel.history()` を定期ポーリングし、前回チェック以降の
+  新規メッセージ(bot自身の発言は除く)だけを `game_command_format` で整形し、
+  `write_server_in()` でサーバーへ書き込みます。改行は `write_server_in` が複数コマンドの
+  区切りとして解釈してしまうため必ず除去してから渡します。
+
+> [!WARNING]
+> Discord→サーバーは「bot が参加している全てのDiscordサーバーの全チャンネル」が対象です。
+> モデレーター専用チャンネルなど、サーバー内に見せたくない内容のあるチャンネルにbotを招待している
+> 場合、その発言もサーバー内チャットへそのまま転送されます。個人〜身内数人規模の運用を前提に
+> した割り切りです。公開性の高い環境で使う場合は、転送したくないチャンネルからそのチャンネル
+> だけbotの閲覧権限を外すなどして調整してください。
+
+既定の書式同士は「`say {server} #{channel} ✧ <name> chat` を送信した結果ログに出る
+`[Server] {server} #{channel} ✧ <name> chat`」が `game_log_pattern` の `: <{name}>` という
+並びに一致しないため、Discordから転送した発言がそのままサーバーに送り返され自己ループする心配は
+ありません(実際にレンダリングした文字列で検証済み)。ただしこれは既定値同士の組み合わせで
+たまたま成立している性質なので、他のゲーム用に `game_log_pattern` / `game_command_format` を
+変更する場合は `/extension-chat-bridge test` で自己ループが起きないか確認してください。
+
+**前提**: Discordメッセージの内容を読み取るには Message Content Intent が必要です。
+`bot/client.py` を確認したところ、コード側の `discord.Intents` では既に
+`intents.message_content = True` が設定済みでした。残る前提は
+[Discord Developer Portal](https://discord.com/developers/applications) 側でこのBotアプリケーションの
+「Message Content Intent」をオンにすることだけです(こちらはコードでは有効化できない、
+Discord側の設定)。無効なままだと、サーバー→Discordは動作しますが、Discord→サーバーの発言内容が
+常に空になり中継されません。
+
+- `/extension-chat-bridge status` — 現在の設定と稼働状況を表示(サーバー→Discordの転送先チャンネル、
+  Discord→サーバーで実際に監視対象になっているDiscordサーバー数/チャンネル数を含む)
+- `/extension-chat-bridge test <sample_line>` — `game_log_pattern` をサンプル行に対して試す
+  (マッチ結果とDiscord送信プレビューを表示)
+- `/extension-chat-bridge config` — 有効/無効・サーバー→Discordの転送先チャンネル・サーバー表示名・
+  サーバーログ判定パターン・Discord表示書式・サーバー送信コマンド書式を設定
+  (要上位権限)。`enabled` を `true` にする際、中継先チャンネル未設定なら実行チャンネルへ
+  自動的にフォールバックします(`scheduled-backup` と同様)。

@@ -18,6 +18,7 @@ mikanassets/
     downtime-notifier/commands.py            ← 予期しないダウン通知
     rcon/commands.py                         ← RCON経由コマンド実行(確実な結果取得 + エイリアス多数)
     world-visualizer/                        ← ワールド全体マップ画像 + プレイヤー所持品画像(複数ファイル構成)
+    update-watch/commands.py                 ← バージョン更新監視 + 半自動アップデート
 ```
 
 `mikanassets/` 以下は server-bot-v3 が実際に読み込むディレクトリ構成と同じです。
@@ -127,8 +128,7 @@ server-bot-v3 を配置しているディレクトリの `mikanassets/extension/
 (一度も実行していない間は「前回実行: なし」と表示されます)。`next_run_in_minutes`(今から何分後か)
 で次回1回分の実行時刻を明示指定でき、実行後は自動で通常の間隔ベースの計算に戻ります。日時文字列を
 正確に入力させる方式は使いにくいため、他のパラメータ(`interval_minutes`等)と同じ「分数」ベースの
-指定に統一しています。Botが停止していた間や拡張外でバックアップした場合に前回時刻を補正したい場合は
-`last_backup_minutes_ago`(前回は何分前だったことにするか)で直接指定できます。
+指定に統一しています。
 
 次回実行時刻は「サイクルが完了した時刻」ではなく「本来狙っていた理想スロット」を起点に計算するため、
 バックアップの所要時間がそのままインターバルに上乗ってずれ続けることはありません(例: 5分間隔で
@@ -139,8 +139,7 @@ server-bot-v3 を配置しているディレクトリの `mikanassets/extension/
 - `/extension-scheduled-backup run-now` — スケジュールを待たず今すぐサイクルを実行(要上位権限)
 - `/extension-scheduled-backup config` — 有効/無効・間隔・バックアップ対象(`server_path`基準の相対パス)・
   Discord通知有無/通知先チャンネル・サーバーへの事前警告(分数とコマンド)・停止待ちタイムアウト秒数・
-  次回1回分の実行時刻(`next_run_in_minutes`)・前回バックアップ時刻の補正(`last_backup_minutes_ago`)
-  を設定(要上位権限)
+  次回1回分の実行時刻(`next_run_in_minutes`)を設定(要上位権限)
 
 権限レベルは `rcon` 拡張と同じく `state.json` ではなく `.config` の
 `discord_commands.permission.commands_level` で管理します(`extension-scheduled-backup status` は既定0、
@@ -310,3 +309,39 @@ Minecraftバージョンは、ワールドの `<level-name>/level.dat` (NBTのDa
 パレット)を前提にしているため、1.17以前のワールドでは `map` が正しく描画できない場合が
 あります(詳しい制約は `wv_worldmap.py` 冒頭のdocstringを参照)。読み取り専用のため権限チェックは
 設けていません(`whitelist-ops-viewer` と同様)。
+
+### update-watch
+
+`world-visualizer` のバージョン自動検出を実機検証した際、`versions/` に新しいバージョンの
+jarが既に置かれているのに、実際に稼働しているワールドは古いバージョンのまま保存され続けている
+状態が見つかりました。「新しいバージョンは取得したが、実際に切り替える(停止→バックアップ→
+jar差し替え→起動)作業が手間で後回しになっている」という実際の運用コストを埋めるための拡張です。
+
+- 一定間隔(既定24時間)でMojangのバージョンマニフェストを取得し、ワールドの
+  `<level-name>/level.dat` (Data.Version.Name、`world-visualizer` と同じ検出方式)と比較、
+  新しいバージョンがあればDiscordへ通知します(同じバージョンで再通知はしません)。
+- `/extension-update-watch apply [version]` で実際の切り替え(停止→バックアップ→
+  `server.jar` 差し替え→起動)を半自動実行できます。バージョン文字列同士の大小比較は
+  誤りやすいため自作せず、マニフェスト自身の `releaseTime` 順を使っています。
+
+**安全策**:
+- jarのダウンロード・sha1/サイズ検証はサーバー稼働中に済ませ、実際のファイル差し替えは
+  停止後にのみ行います(Windows環境ではJVMがserver.jarを実行中ずっと開いたままにするため)。
+- 差し替え前に必ず `server_path` 全体をバックアップします(対象を選ばせません)。
+- `plugins/` (Paper/Spigot系) または `mods/` (Forge/Fabric系) が存在するサーバー構成では
+  `apply` 自体を拒否します。Mojang配布のvanilla jarへ黙って差し替えると導入済みの
+  プラグイン/MODが動かなくなる事故につながるため、バニラ以外は対象外にしています。
+- 起動失敗時の自動ロールバックは行いません(`downtime-notifier` と同じ理由で、プロセス
+  ポーリングだけでは「新バージョン側の問題」か「起動に時間がかかっているだけ」かを
+  確実に区別できないため)。直前に取ったバックアップの場所を結果に明記するので、
+  問題があればコアBotの `/backup apply` で手動対応してください。
+
+- `/extension-update-watch status` — 検出中のバージョンと更新状況を表示
+- `/extension-update-watch check-now` — 今すぐMojangのバージョンマニフェストを確認
+- `/extension-update-watch apply [version]` — 停止→バックアップ→jar差し替え→起動を実行(要上位権限)
+- `/extension-update-watch config` — 自動チェック有効/無効・間隔(時間)・通知先チャンネル・
+  スナップショットを対象に含めるか・対象jarファイル名・停止待ちタイムアウト秒数を設定(要上位権限)
+
+権限レベルは `rcon` / `scheduled-backup` と同じく `state.json` ではなく `.config` の
+`discord_commands.permission.commands_level` で管理します(`status` / `check-now` は既定0、
+`apply` / `config` は既定2)。

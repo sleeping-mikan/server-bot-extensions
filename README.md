@@ -29,6 +29,19 @@ server-bot-v3 を配置しているディレクトリの `mikanassets/extension/
 
 ## コーディング規約
 
+- **拡張機能向けオブジェクトは `bot.extension_api` からまとめてimportする**(2026-08-08〜)。
+  以前は `bot.client` / `bot.utils` / `core.state` / `core.log_tailer` / `server.backup` /
+  `server.control` など使いたいオブジェクトごとに元のモジュールを import していたが、
+  server-bot-v3 側に追加された再エクスポート専用モジュール `bot.extension_api` に
+  拡張機能が使いそうなものが1か所に集約されたため、以後はこれ1つを import すればよい。
+
+  ```python
+  from bot.extension_api import ctx, ModifiedEmbeds, user_permission, append_task
+  ```
+
+  公開されているオブジェクトの一覧は [plan.json](plan.json) の `extension_api_summary.available`
+  を参照。実装はそれぞれの元モジュール側にあるため、`bot.extension_api` 自体はimportを
+  再エクスポートしているだけ(ロジックの重複はない)。
 - **embedは `bot.embeds.ModifiedEmbeds` を使う**。生の `discord.Embed(...)` は直接使わない。
   `ModifiedEmbeds.DefaultEmbed(title, description=None)` / `ModifiedEmbeds.ErrorEmbed(title, description=None)`
   はどちらも `discord.Embed` のサブクラスで、共通の下線画像・サムネイルを自動設定する。

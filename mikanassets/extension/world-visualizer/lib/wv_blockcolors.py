@@ -55,7 +55,7 @@ import io
 import json
 from pathlib import Path
 
-from core.state import ctx
+from bot.extension_api import ctx
 
 import wv_mojangjar
 import wv_serverfiles

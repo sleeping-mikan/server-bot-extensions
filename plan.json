@@ -5,19 +5,26 @@
   "generated_at": "2026-07-24",
   "operator_profile": "個人〜身内数人で運用するバニラMinecraft Java サーバー1台。管理者はDiscord上1名想定(.config の admin.members が1件)。この前提で「実際に月1回以上使われるか」を採用基準にしている。",
   "extension_api_summary": {
-    "import_from": "core.state.ctx (モジュール先頭で読み込み、以後 tree/logger の変数に保持する)",
+    "import_from": "bot.extension_api (2026-08-08: server-bot-v3 側に追加された再エクスポート専用モジュール。以前は core.state.ctx / bot.client / bot.utils / server.backup / server.control などを個別にimportする必要があったが、以後は基本的にこの1モジュールをimportすればよい。実装はそれぞれの元モジュールにあり、bot.extension_api は窓口)",
     "available": [
-      "ctx.extension_commands_group (app_commands.Group, ロード時のみ有効)",
-      "ctx.extension_logger (logging.Logger)",
-      "bot.extensions.get_process() -> Popen | None",
-      "bot.extensions.append_task(func) -> discord.ext.tasks ループを起動/停止管理付きで登録",
-      "bot.extensions.write_server_in(command: str) -> (bool, str) サーバーstdinへ1行書き込み (allow_cmd等の許可リストは通らない、無条件書き込み)",
-      "bot.utils.print_user / user_permission / not_enough_permission (bot本体と共通の権限system)",
-      "ctx.server_path / ctx.server_name / ctx.backup_path / ctx.paths.base 等の読み取り専用パス情報",
-      "bot.client.client (discord.Client) を直接importすればチャンネル取得/送信も可能",
-      "bot.embeds.ModifiedEmbeds.DefaultEmbed / ErrorEmbed (discord.Embedのサブクラス、共通の下線画像・サムネイル付き。コアBotの全コマンドがこれを使うため、拡張機能も生のdiscord.Embedではなくこちらを使う)"
+      "ctx (core.state.ctx。ロード時のみ有効な ctx.extension_commands_group / ctx.extension_logger を含め、モジュール先頭で読み込んで tree/logger の変数に保持するのはこれまで通り)",
+      "get_process() -> Popen | None",
+      "append_task(func) -> discord.ext.tasks ループを起動/停止管理付きで登録",
+      "write_server_in(command: str) -> (bool, str) サーバーstdinへ1行書き込み (allow_cmd等の許可リストは通らない、無条件書き込み)",
+      "print_user / user_permission / not_enough_permission (bot本体と共通の権限system)",
+      "rewrite_config() -> bool ctx.config をファイルへ書き戻す (config済みの値をDiscordコマンドから変更する拡張向け。scheduled-backup/update-watch/rcon/world-visualizer/chat-bridgeが使用)",
+      "get_member_level / set_member_level / is_administrator / is_force_administrator (bot本体と共通の権限レベルAPI。commands_level 以外の管理者判定が必要な場合)",
+      "is_running_server / is_stopped_server (logger付きのサーバー起動状態ガード。停止/稼働前提のコマンドの先頭で使う)",
+      "is_path_within_scope / is_important_bot_file (core.path_utils。ディレクトリトラバーサル対策の境界チェック。ctx.server_path外のパスを拒否する。scheduled-backupが使用)",
+      "LogManager (core.log_setup。ctx.extension_logger 経由が基本だが、共有ロガー基盤そのものが必要な場合に)",
+      "LogTailer / LogTailerEmptyError (core.log_tailer。`async for line in tailer:` でサーバー含む全ロガーの共有バッファを非同期に監視できる。chat-bridgeが使用)",
+      "create_backup / apply_backup (async) / create_backup_sync / apply_backup_sync / ProgressCallback (server.backup。コアBotの /backup create /backup apply と同じ実装)",
+      "start_server / stop_server / StartResult / StopResult (server.control。コアBotの /start /stop と同じ実装。scheduled-backup/update-watchが「停止→バックアップ→起動」サイクルに使用)",
+      "client / tree (bot.client。discord.Client / CommandTree。チャンネル取得/送信が必要な場合に直接import可能)",
+      "ModifiedEmbeds.DefaultEmbed / ErrorEmbed (bot.embeds。discord.Embedのサブクラス、共通の下線画像・サムネイル付き。コアBotの全コマンドがこれを使うため、拡張機能も生のdiscord.Embedではなくこちらを使う)"
     ],
     "coding_conventions": [
+      "importは個別モジュール(core.state/bot.client/bot.utils/server.backup等)からではなく bot.extension_api からまとめて行う(2026-08-08: 全11拡張(world-visualizerのlib/以下含む)を一括で置換済み。理由は上記 import_from を参照)。",
       "embedは常に bot.embeds.ModifiedEmbeds.DefaultEmbed / ErrorEmbed を使う。生の discord.Embed(...) やプレーンテキストの send_message は使わない(2026-07-24: 全7拡張を一括で置換済み)。",
       "コマンドの description に権限要件(『要上位権限』等)を書かない。権限レベルは .config の discord_commands.permission.commands_level で変更可能な設定値であり、description に固定的に書くと実態と食い違いうる。description は『何をするか』の説明に留め、権限要件は別セクション(モジュールdocstringの専用節やREADME)にまとめる(2026-07-24: rconから該当箇所を削除)。"
     ],

@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from core.state import ctx
+from bot.extension_api import ctx
 
 
 def read_server_properties() -> dict[str, str]:

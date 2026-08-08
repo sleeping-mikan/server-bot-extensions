@@ -135,13 +135,20 @@ import discord
 from discord import app_commands
 from discord.ext import tasks
 
-from bot.client import client
-from bot.embeds import ModifiedEmbeds
-from bot.extensions import append_task, write_server_in
-from bot.utils import not_enough_permission, print_user, rewrite_config, user_permission
-from core.log_setup import LogManager
-from core.log_tailer import LogTailer, LogTailerEmptyError
-from core.state import ctx
+from bot.extension_api import (
+    LogManager,
+    LogTailer,
+    LogTailerEmptyError,
+    ModifiedEmbeds,
+    append_task,
+    client,
+    ctx,
+    not_enough_permission,
+    print_user,
+    rewrite_config,
+    user_permission,
+    write_server_in,
+)
 
 # ロード時のみ ctx にセットされる値なので、モジュール先頭で変数に保持しておく
 tree = ctx.extension_commands_group

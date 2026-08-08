@@ -21,7 +21,7 @@ from __future__ import annotations
 import gzip
 import json
 
-from core.state import ctx
+from bot.extension_api import ctx
 
 import wv_serverfiles
 from wv_nbt import NBTReader

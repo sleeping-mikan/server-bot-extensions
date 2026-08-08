@@ -96,9 +96,14 @@ from typing import Literal
 import discord
 from discord import app_commands
 
-from bot.embeds import ModifiedEmbeds
-from bot.utils import not_enough_permission, print_user, rewrite_config, user_permission
-from core.state import ctx
+from bot.extension_api import (
+    ModifiedEmbeds,
+    ctx,
+    not_enough_permission,
+    print_user,
+    rewrite_config,
+    user_permission,
+)
 
 # ロード時のみ ctx にセットされる値なので、モジュール先頭で変数に保持しておく
 tree = ctx.extension_commands_group

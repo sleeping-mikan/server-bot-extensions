@@ -47,14 +47,24 @@ import discord
 from discord import app_commands
 from discord.ext import tasks
 
-from bot.client import client
-from bot.embeds import ModifiedEmbeds
-from bot.extensions import append_task, write_server_in
-from bot.utils import not_enough_permission, print_user, rewrite_config, user_permission
-from core.path_utils import is_path_within_scope
-from core.state import ctx
-from server.backup import ProgressCallback, create_backup
-from server.control import StartResult, StopResult, start_server, stop_server
+from bot.extension_api import (
+    ModifiedEmbeds,
+    ProgressCallback,
+    StartResult,
+    StopResult,
+    append_task,
+    client,
+    create_backup,
+    ctx,
+    is_path_within_scope,
+    not_enough_permission,
+    print_user,
+    rewrite_config,
+    start_server,
+    stop_server,
+    user_permission,
+    write_server_in,
+)
 
 # ロード時のみ ctx にセットされる値なので、モジュール先頭で変数に保持しておく
 tree = ctx.extension_commands_group

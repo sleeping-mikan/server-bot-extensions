@@ -15,9 +15,11 @@ from typing import Callable
 
 import discord
 
-from bot.embeds import ModifiedEmbeds
-from bot.utils import print_user
-from core.state import ctx
+from bot.extension_api import (
+    ModifiedEmbeds,
+    ctx,
+    print_user,
+)
 
 # ロード時のみ ctx にセットされる値なので、モジュール先頭で変数に保持しておく
 tree = ctx.extension_commands_group

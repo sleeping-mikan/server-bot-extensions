@@ -30,7 +30,7 @@ import zlib
 from pathlib import Path
 from typing import Iterator
 
-from core.state import ctx
+from bot.extension_api import ctx
 
 import wv_blockcolors
 import wv_serverfiles

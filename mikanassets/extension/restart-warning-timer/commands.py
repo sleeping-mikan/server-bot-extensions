@@ -14,10 +14,15 @@ from datetime import datetime, timedelta
 import discord
 from discord.ext import tasks
 
-from bot.embeds import ModifiedEmbeds
-from bot.extensions import append_task, write_server_in
-from bot.utils import not_enough_permission, print_user, user_permission
-from core.state import ctx
+from bot.extension_api import (
+    ModifiedEmbeds,
+    append_task,
+    ctx,
+    not_enough_permission,
+    print_user,
+    user_permission,
+    write_server_in,
+)
 
 # ロード時のみ ctx にセットされる値なので、モジュール先頭で変数に保持しておく
 tree = ctx.extension_commands_group

@@ -143,9 +143,14 @@ from typing import Literal
 import discord
 from discord import app_commands
 
-from bot.embeds import ModifiedEmbeds
-from bot.utils import not_enough_permission, print_user, rewrite_config, user_permission
-from core.state import ctx
+from bot.extension_api import (
+    ModifiedEmbeds,
+    ctx,
+    not_enough_permission,
+    print_user,
+    rewrite_config,
+    user_permission,
+)
 
 # lib/ を sys.path へ追加してから "wv_" prefix 付きの兄弟モジュールをimportする
 # (理由は本docstring「ファイル構成」節を参照)。

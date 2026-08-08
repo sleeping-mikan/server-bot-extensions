@@ -22,11 +22,15 @@ from pathlib import Path
 import discord
 from discord.ext import tasks
 
-from bot.client import client
-from bot.embeds import ModifiedEmbeds
-from bot.extensions import append_task
-from bot.utils import not_enough_permission, print_user, user_permission
-from core.state import ctx
+from bot.extension_api import (
+    ModifiedEmbeds,
+    append_task,
+    client,
+    ctx,
+    not_enough_permission,
+    print_user,
+    user_permission,
+)
 
 # ロード時のみ ctx にセットされる値なので、モジュール先頭で変数に保持しておく
 tree = ctx.extension_commands_group

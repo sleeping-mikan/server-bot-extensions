@@ -17,7 +17,7 @@ import zipfile
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from core.state import ctx
+from bot.extension_api import ctx
 
 logger = ctx.extension_logger
 
